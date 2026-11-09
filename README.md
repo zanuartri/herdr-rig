@@ -85,6 +85,7 @@ The first time in a repo, the manager asks once about harness, model, effort, pa
 - **Messages:** workers and reviewers run `rig say manager "…"`. The manager listens with `rig inbox --wait` as a background command, so nothing is typed into its pane while you write. Without a listener, rig types a message in only while you are not focused on that pane, and bundles anything that piled up into one message.
 - **Base branch:** a ticket starts from, and lands on, the branch the manager had checked out when it was created (`--base` picks another).
 - **Order:** `rig new "…" --after T-3,T-4` keeps a ticket Queued, and the manager hears when it is unblocked.
+- **Worktree spaces:** `rig set worktree herdr` (or `--worktree herdr`) opens each ticket as its own herdr space: worker on the left, reviewer on the right while it runs, and your manager space keeps just the manager and the board. `done` closes the space.
 - **Cleanup:** `done` closes the ticket's panes and tabs and removes its worktree and branch once the changes are in the base branch (normal or squash merge). Unmerged work is kept. `rig clean` sweeps leftovers.
 
 ## Layout

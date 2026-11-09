@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- `rig set worktree herdr` (or `--worktree herdr` on one dispatch): each ticket gets its own space, with the worker on the left and its reviewer split to the right. The manager's space keeps only the manager and the board. `done` / `rig close` closes the space; the landed check still decides whether the worktree and branch go. On the herdr CLI the worktree comes from `herdr worktree create`; in the desktop app rig creates it with git and opens it with `space.new`. Opening the space never moves your view. `on` and `off` behave as before.
+
 ### Fixed
 - `rig tell T-n` and `rig stop T-n` went to the newest run, so a FIX sent after review reached the reviewer instead of the worker. A ticket now means its worker; `--role reviewer` or a run number picks another.
 

@@ -18,7 +18,7 @@ If `rig get setup` is empty, this repo has no defaults yet. Before your first di
 | `worker.harness` / `worker.model` / `worker.effort` | who writes the code | only the harnesses that `rig install` found, or that are on PATH; model and effort default to the harness's own |
 | `reviewer.harness` / `.model` / `.effort` | who reviews | a different model family from the worker's |
 | `mode` | how runs show up | `pane` (watch live) · `tab` · `headless` (background, cheapest on attention) |
-| `worktree` | isolate each ticket | `on` · `off` (only for tiny single-ticket repos) |
+| `worktree` | isolate each ticket | `on` · `off` (only for tiny single-ticket repos) · `herdr` (`on`, plus a space per ticket: worker left, reviewer right, nothing beside you but the board) |
 | `autonomy` | how far you go alone | `review` · `ask` · `merge` (auto-merge when review passes and verify is green) |
 | `merge` | how work lands | `local` (squash into the current branch) · `pr` (push the branch and open a PR with `gh`) |
 

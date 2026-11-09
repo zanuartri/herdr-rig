@@ -63,7 +63,7 @@ A worker only knows what is in the ticket, so put the user's decisions there and
 
 ## 3. While runs are going
 
-- **Listen, don't get typed into.** While runs are active, keep `rig inbox --wait` running as a background command, if your harness can run one and wake you when it exits (Claude Code: Bash with `run_in_background`). It returns as soon as a message arrives. Handle the message, then start the listener again. While it runs, rig never types into your pane, so a draft the user is writing stays untouched.
+- **Listen, don't get typed into.** While runs are active, keep `rig inbox --wait` running as a background command, if your harness can run one and wake you when it exits (Claude Code: Bash with `run_in_background`). It returns as soon as a message arrives. Handle the message, then start the listener again. Keep only one listener: starting a new one makes the old one exit with `(replaced by a newer listener)`, which you can ignore. While it runs, rig never types into your pane, so a draft the user is writing stays untouched.
 - Without a background listener, messages are typed into your session as `[rig] message from …`, but only while the user isn't focused on your pane. That can still collide with a draft they left unsent. Read anything missed with `rig inbox` at the start of each turn. Answer questions quickly with `rig say T-3 "…"`. Give a decision, not a discussion.
 - `rig ps` shows live runs. `herdr agent read <pane> --lines 60` shows what a pane agent is doing, and `.rig/run-<n>.log` holds a headless run's output. Read these before you steer.
 - To steer, run `rig tell T-3 "…"`. Add `--now` to interrupt the current step first. For a headless run, `tell` interrupts and resumes with your message. To halt a run, use `rig stop T-3`.

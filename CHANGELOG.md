@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-11-09
+
+### Fixed
+- `rig inbox --wait`: when a newer listener starts for the same manager, the older one exits with `(replaced by a newer listener)` instead of reading messages meant for the newer one. Before this, a reviewer's verdict could be swallowed and a ticket would sit in review. ([#1](https://github.com/zanuartri/herdr-rig/pull/1), thanks @mfh7)
+- `rig install` puts the Claude Code skills under `$CLAUDE_CONFIG_DIR/skills` when that variable is set, so sessions on another profile find them. ([#1](https://github.com/zanuartri/herdr-rig/pull/1))
+- Tests no longer follow an inherited `RIG_ROOT`, so running `bun test` inside a rig worker doesn't write tickets into the real repo. ([#1](https://github.com/zanuartri/herdr-rig/pull/1))
+
+### Changed
+- The manager skill says to keep a single listener, and that the `(replaced by a newer listener)` notice can be ignored.
+
 ## [0.1.0] - 2026-11-08
 
 First public release.
@@ -19,4 +29,5 @@ First public release.
 - The board, as a native herdr-app mod and as a terminal board with spinners and an activity feed.
 - CI on Linux, macOS and Windows.
 
+[0.1.1]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.0

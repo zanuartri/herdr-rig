@@ -1,5 +1,5 @@
 {
   "name": "rig",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "One manager session drives worker and reviewer agents in herdr panes or headless, through the rig CLI."
 }

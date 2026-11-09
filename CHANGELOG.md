@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-11-09
 
 ### Added
 - `rig set worktree herdr` (or `--worktree herdr` on one dispatch): each ticket gets its own space, with the worker on the left and its reviewer split to the right. The manager's space keeps only the manager and the board. `done` / `rig close` closes the space; the landed check still decides whether the worktree and branch go. On the herdr CLI the worktree comes from `herdr worktree create`; in the desktop app rig creates it with git and opens it with `space.new`. Opening the space never moves your view. `on` and `off` behave as before.
@@ -63,6 +63,7 @@ First public release.
 - The board, as a native herdr-app mod and as a terminal board with spinners and an activity feed.
 - CI on Linux, macOS and Windows.
 
+[0.2.0]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.2.0
 [0.1.4]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.4
 [0.1.3]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.3
 [0.1.2]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.2

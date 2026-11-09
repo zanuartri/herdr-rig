@@ -1,6 +1,6 @@
 {
   "name": "herdr-rig",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "One manager agent drives worker and reviewer agents (Claude Code, Codex, opencode, pi, omp, Command Code) in herdr panes, tabs or headless.",
   "license": "MIT",
   "author": "Zanuar Tri Romadon",

@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `rig tell T-n` and `rig stop T-n` went to the newest run, so a FIX sent after review reached the reviewer instead of the worker. A ticket now means its worker; `--role reviewer` or a run number picks another.
+
 ## [0.1.4] - 2026-11-09
 
 ### Fixed

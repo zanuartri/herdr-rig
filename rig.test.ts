@@ -139,6 +139,9 @@ test("the board shows the running worker, not a reviewer that already closed", (
   const t = json.groups.find((g: any) => g.title === "Working").tickets[0];
   expect(t.run.role).toBe("worker");
   expect(t.orphan).toBe(false);
+  // `tell T-1` steers the worker even though the reviewer is the newer run
+  rig("tell", "T-1", "fix it");
+  expect(Bun.spawnSync(["bun", join(import.meta.dir, "rig.ts"), "inbox"], { cwd: repo, env: { ...env, RIG_RUN: "1" } }).stdout.toString()).toContain("fix it");
   rig("close", "T-1");
 }, 30000);
 

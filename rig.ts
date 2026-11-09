@@ -249,7 +249,9 @@ async function main(args: string[]) {
     ORDER BY id DESC LIMIT 1`).get(...(role ? [t, role] : [t])) as any;
   // the board shows who is on a ticket now: its newest running run (a closed reviewer must not hide a working worker), else the last one
   const boardRun = (t: string) => (db.query("SELECT * FROM runs WHERE ticket=? COLLATE NOCASE AND status='running' ORDER BY id DESC LIMIT 1").get(t) as any) ?? lastRun(t);
-  const runOf = (target: string) => (/^\d+$/.test(target) ? db.query("SELECT * FROM runs WHERE id=?").get(Number(target)) : lastRun(target, o.role as string)) as any
+  // a ticket means its worker (FIX findings and steering go there), even while a newer reviewer run exists;
+  // --role reviewer or a run number picks another
+  const runOf = (target: string) => (/^\d+$/.test(target) ? db.query("SELECT * FROM runs WHERE id=?").get(Number(target)) : lastRun(target, (o.role as string) ?? "worker")) as any
     ?? die(`no run for ${target}`);
   const kill = (pid: number) => process.platform === "win32"
     ? sh(["taskkill", "/T", "/F", "/PID", String(pid)]) : (() => { try { process.kill(-pid, "SIGTERM"); } catch {} })();
@@ -846,7 +848,7 @@ const HELP = `rig: manager/worker/reviewer rig on herdr. State: <repo>/.rig/rig.
   rig new "title" [--body text|-] [--review] [--after T-3,T-4] [--base br]  create ticket (queued until those are done; base = your branch)
   rig ls [--mine] [--all] | rig show <T> | rig edit <T> status=done title=... [--body -]
   rig dispatch <T> [note] [--role worker|reviewer] [--harness h] [--model m] [--effort e] [--mode pane|tab|headless] [--no-worktree]
-  rig tell <T|run#> <msg> [--now] [--role r]  steer a run (--now interrupts first; headless = interrupt + resume)
+  rig tell <T|run#> <msg> [--now] [--role r]  steer the worker (or --role reviewer) (--now interrupts first; headless = interrupt + resume)
   rig stop <T|run#>                          interrupt
   rig say <manager|human|T|T/role> <msg>    message (pushed into the pane; human = herdr toast)
   rig board [--open|--tab] [--mine] [--all]  live ticket board (--open splits a pane, --tab opens a tab)

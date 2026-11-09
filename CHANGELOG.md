@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `rig update`: reinstalls from GitHub, or pulls a git checkout, and refreshes the board mod.
+
+### Changed
+- `rig install` writes a short skill that runs `rig skill <role>`, so skills always match the installed rig and updates need no reinstall.
+
 ## [0.1.1] - 2026-11-09
 
 ### Fixed

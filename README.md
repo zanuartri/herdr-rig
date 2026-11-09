@@ -46,7 +46,9 @@ rig install       # copies the rig-manager/-worker/-reviewer skills into every a
                   # and the board mod into the herdr desktop app if it is installed
 ```
 
-To hack on it instead, clone the repo and run `bun link` inside it. `rig` then runs your checkout, so changes apply right away (run `rig install` again after editing a skill). To update an install, run the `bun add -g` line again.
+To update, run `rig update`. The installed skills only point at `rig skill <role>`, so they always match the rig you have and never need reinstalling.
+
+To hack on it instead, clone the repo and run `bun link` inside it. `rig` then runs your checkout, so changes apply right away, and `rig update` does a `git pull`.
 
 For Claude Code you can use the plugin instead: `claude plugin marketplace add zanuartri/herdr-rig`, then `claude plugin install rig@herdr-rig`.
 

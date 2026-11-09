@@ -86,7 +86,9 @@ test("install copies renamed skills only into harnesses that exist", () => {
   expect(out).toContain("codex:");
   expect(out).toContain("opencode:");
   expect(out).not.toContain("claude:");
-  expect(require("node:fs").readFileSync(join(home, ".codex/skills/rig-worker/SKILL.md"), "utf8")).toContain("name: rig-worker");
+  const skill = require("node:fs").readFileSync(join(home, ".codex/skills/rig-worker/SKILL.md"), "utf8");
+  expect(skill).toContain("name: rig-worker");
+  expect(skill).toContain("rig skill worker"); // a pointer, so an update needs no reinstall
 });
 
 test("install puts Claude skills under CLAUDE_CONFIG_DIR when it is set", () => {

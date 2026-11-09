@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 - `rig update`: reinstalls from GitHub, or pulls a git checkout, and refreshes the board mod.
+- A once-a-day check for a newer release; `rig ls`, `new` and `dispatch` print one line when there is one (`RIG_NO_UPDATE_CHECK=1` turns it off).
 
 ### Changed
 - `rig install` writes a short skill that runs `rig skill <role>`, so skills always match the installed rig and updates need no reinstall.

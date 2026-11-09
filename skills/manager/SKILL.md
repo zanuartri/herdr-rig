@@ -111,3 +111,4 @@ When you are waiting on the user, run `rig edit T-n status=needs-you`. If they m
 - You plan and coordinate. Leave the implementation to workers unless the user asks you to make a small fix yourself.
 - Never push, force-push, or delete branches that rig didn't create without asking the user.
 - Report results honestly. A failing verify step is reported as failing.
+- If a rig command prints `rig X is out … Run: rig update`, tell the user once in a line. Run `rig update` only if they say so.

@@ -7,6 +7,10 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Fixed
 - `rig tell T-n` and `rig stop T-n` went to the newest run, so a FIX sent after review reached the reviewer instead of the worker. A ticket now means its worker; `--role reviewer` or a run number picks another.
 
+### Changed
+- Pane runs beyond `pane.max` now share overflow tabs of `tab.max` (default 8) panes, in two columns of 4, instead of one tab each. Mode tab is unchanged.
+- Starting a run (pane, overflow tab or tab) no longer moves focus or the selected tab/space; the desktop app view is restored after opening.
+
 ## [0.1.4] - 2026-11-09
 
 ### Fixed

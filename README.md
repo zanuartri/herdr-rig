@@ -89,7 +89,7 @@ The first time in a repo, the manager asks once about harness, model, effort, pa
 
 ## Layout
 
-The manager keeps the left half. The board opens by itself in the top half on the right, and up to `pane.max` (default 2) pane runs stack under it. Later runs open as tabs. Panes always open beside the manager, in its own space, not wherever you happen to be looking.
+The manager keeps the left half. The board opens by itself in the top half on the right, and up to `pane.max` (default 2) pane runs stack under it. Later runs fill overflow tabs of `tab.max` (default 8) panes each, two columns of 4: the left column fills first (four even rows), then one pane opens beside each row; a full tab opens the next. With `--mode tab` every run gets its own tab. Starting a run never moves your view: focus and the selected tab/space stay where they were. Panes always open beside the manager, in its own space, not wherever you happen to be looking.
 
 Change it for one run with `--mode tab|pane|headless`, or for good with `rig set pane.max 3`, `rig set mode tab`, `rig set board tui|off`.
 

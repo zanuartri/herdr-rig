@@ -2,7 +2,7 @@ import { test, expect, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { argv, HARNESSES } from "./rig.ts";
+import { argv, HARNESSES, slot } from "./rig.ts";
 
 // every temp repo and home a test makes goes when the run ends
 const made: string[] = [];
@@ -147,4 +147,15 @@ test("the board shows the running worker, not a reviewer that already closed", (
 
 test("no test followed the inherited RIG_ROOT", () => {
   expect(require("node:fs").existsSync(join(decoy, ".rig"))).toBe(false);
+});
+
+test("slot: overflow tab fills the left column (4 even rows), then one pane beside each row, then a new tab", () => {
+  const p = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
+  expect(slot([])).toEqual({ place: "tab" });
+  expect(slot(p(1))).toEqual({ place: "down", anchor: "p0" });
+  expect(slot(p(2))).toEqual({ place: "down", anchor: "p0" });
+  expect(slot(p(3))).toEqual({ place: "down", anchor: "p1" });
+  expect(slot(p(4))).toEqual({ place: "right", anchor: "p0" });
+  expect(slot(p(7))).toEqual({ place: "right", anchor: "p3" });
+  expect(slot(p(8))).toEqual({ place: "tab" });
 });

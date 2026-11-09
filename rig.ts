@@ -17,6 +17,16 @@ const now = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 // ---- harnesses: data, not code. "{model}" expands to the `model` args, then the `effort` args (each dropped when unset). Prompt is appended last.
 // launch: the interactive command takes the first prompt as its last argument. Typing it into a booting TUI can be lost,
 // or worse, answer a startup dialog (the claude folder-trust prompt defaults to "No, exit"). Without launch, rig types it.
+/** where the next overflow run goes, given the live panes of one overflow tab in open order: a split off `anchor`, or a new tab.
+ *  Left column first: each split halves a pane, so splitting c0, c0, c1 gives four equal rows (no ratio needed on either backend).
+ *  Then the right column: one pane beside each left row, so it is two true columns. After a close the count is lower, so the gap just fills. */
+export function slot(panes: string[], max = 8): { place: "tab" | "right" | "down", anchor?: string } {
+  const n = panes.length, half = Math.ceil(max / 2);
+  if (n === 0 || n >= max) return { place: "tab" };
+  if (n >= half) return { place: "right", anchor: panes[n - half] };
+  return { place: "down", anchor: panes[n - 2 ** Math.floor(Math.log2(n))] };
+}
+
 export const HARNESSES: Record<string, any> = {
   claude: { kind: "claude", launch: true, model: ["--model", "{model}"], effort: ["--effort", "{effort}"],
     interactive: ["claude", "--dangerously-skip-permissions", "--session-id", "{sid}", "{model}"],
@@ -126,7 +136,19 @@ export const mux = HC ? {
   notify: (title: string, body: string) => {}, // ponytail: no toast API in herdr-app yet; the message is stored and shows on the board
   // place it next to the manager (its own space/pane), not wherever the person is looking now
   // cmd: a program, or { mod, props } for an app mod pane. Returns the terminal, or the pane for a mod.
+  // opening must never move the person's view: put the selected space/tab and the focused pane back afterwards
   open(place: "right" | "down" | "tab", cwd: string, name: string, cmd: string[] | { mod: string, props: any }, anchor = SELF): string {
+    let v: any; try { v = JSON.parse(sh(["herdr-app", "status"]).out); } catch {}
+    try { return this.open_(place, cwd, name, cmd, anchor); } finally {
+      try {
+        const n = JSON.parse(sh(["herdr-app", "status"]).out);
+        if (v?.space && n.space !== v.space) sh(["herdr-app", "do", "space.select", "--id", v.space]);
+        if (v?.tab && n.tab !== v.tab) sh(["herdr-app", "do", "tab.select", "--id", v.tab]);
+        if (v?.focused_pane && n.focused_pane !== v.focused_pane) sh(["herdr-app", "do", "pane.focus", "--pane", v.focused_pane]);
+      } catch {}
+    }
+  },
+  open_(place: "right" | "down" | "tab", cwd: string, name: string, cmd: string[] | { mod: string, props: any }, anchor = SELF): string {
     let at: { space?: string, pane: string } | undefined = anchor.startsWith("p") ? { pane: anchor } : undefined;
     try { for (const sp of JSON.parse(sh(["herdr-app", "ls"]).out).spaces) for (const tb of sp.tabs) for (const t of tb.terminals)
       if (t.terminal === anchor) at = { space: sp.id, pane: t.pane }; } catch {}
@@ -134,7 +156,7 @@ export const mux = HC ? {
       const r = sh(["herdr-app", "do", place === "tab" ? "tab.new" : "pane.split", JSON.stringify(place === "tab"
         ? { name, mod: cmd.mod, props: cmd.props } : { direction: place, ...(at ? { pane: at.pane } : {}), mod: cmd.mod, props: cmd.props })]);
       const p = r.ok ? JSON.parse(r.out).pane : undefined;
-      if (!p && anchor !== SELF) return this.open(place === "down" ? "right" : place, cwd, name, cmd);
+      if (!p && anchor !== SELF) return this.open_(place === "down" ? "right" : place, cwd, name, cmd);
       return p ?? die(`herdr-app: ${r.err || r.out}`);
     }
     // pane.split has no folder arg, so _exec cds then runs the agent
@@ -143,7 +165,7 @@ export const mux = HC ? {
       : at ? sh(["herdr-app", "do", "pane.split", "--direction", place, "--pane", at.pane, "--argv", JSON.stringify(["bun", import.meta.path, "_exec", cwd, ...cmd])])
       : sh(["herdr-app", "do", "terminal.open", "--folder", cwd, "--place", place, "--argv", JSON.stringify(cmd)]);
     const t = r.ok ? JSON.parse(r.out).terminal : undefined;
-    if (!t && anchor !== SELF) return this.open(place === "down" ? "right" : place, cwd, name, cmd); // anchor gone: start beside the manager
+    if (!t && anchor !== SELF) return this.open_(place === "down" ? "right" : place, cwd, name, cmd); // anchor gone: start beside the manager
     return t ?? die(`herdr-app: ${r.err || r.out}`);
   },
   /** wait until the agent works then settles; returns its status, or null when the terminal is gone */
@@ -202,7 +224,7 @@ export const mux = HC ? {
 const DEFAULTS: Record<string, string> = {
   "worker.harness": "claude", "worker.model": "", "worker.effort": "", "reviewer.harness": "codex", "reviewer.model": "", "reviewer.effort": "",
   merge: "local", setup: "",
-  mode: "pane", worktree: "on", autonomy: "review", "pane.max": "2", board: "auto",
+  mode: "pane", worktree: "on", autonomy: "review", "pane.max": "2", "tab.max": "8", board: "auto",
 };
 
 
@@ -576,13 +598,25 @@ async function main(args: string[]) {
       // ponytail: each split halves the last pane, so heights are only even up to pane.max=2
       let col = mode === "pane" ? column(runId) : [];
       if (mode === "pane" && get("board") !== "off" && !col.includes(get(`board.${me}`))) { openBoard(); col = column(runId); }
-      if (col.length - (col.includes(get(`board.${me}`)) ? 1 : 0) >= Number(get("pane.max"))) { mode = "tab"; db.run("UPDATE runs SET mode='tab' WHERE id=?", [runId]); }
-      const below = mode === "pane" ? col.at(-1) : undefined;
+      let place: "tab" | "right" | "down" = mode === "tab" ? "tab" : col.at(-1) ? "down" : "right";
+      let below = mode === "pane" ? col.at(-1) : undefined;
+      if (mode === "pane" && col.length - (col.includes(get(`board.${me}`)) ? 1 : 0) >= Number(get("pane.max"))) {
+        // overflow: fill the newest overflow tab (mode "over-N"), else open the next one
+        const live = (db.query(`SELECT r.mode, r.pane FROM runs r JOIN tickets t ON t.id=r.ticket WHERE r.mode LIKE 'over-%' AND r.status <> 'closed'
+          AND t.manager=? AND r.id<>? ORDER BY r.id`).all(me, runId) as any[]).filter(r => r.pane && mux.alive(r.pane));
+        const last = db.query("SELECT mode FROM runs WHERE mode LIKE 'over-%' ORDER BY id DESC LIMIT 1").get() as any;
+        let n = Number(last?.mode.slice(5) ?? 0), s = { place: "tab" } as ReturnType<typeof slot>;
+        for (const k of new Set(live.map(r => r.mode)))
+          if ((s = slot(live.filter(r => r.mode === k).map(r => r.pane), Number(get("tab.max")))).place !== "tab") { n = Number(k.slice(5)); break; }
+        if (s.place === "tab") n++;
+        mode = `over-${n}`; place = s.place; below = s.anchor;
+        db.run("UPDATE runs SET mode=? WHERE id=?", [mode, runId]);
+      }
       if (mode === "headless") { spawnHeadless(runId, argv(h, "headless", model, sid, prompt, effort), cwd); return console.log(`run #${runId} headless`); }
 
       if (HC) {
         const cmdv = argv(h, "interactive", model, sid, h.launch ? prompt : undefined, effort);
-        const pane = mux.open(mode === "tab" ? "tab" : below ? "down" : "right", cwd, `${t.id} ${role}`, [...bin(cmdv[0]), ...cmdv.slice(1)], below);
+        const pane = mux.open(place, cwd, `${t.id} ${role}`, [...bin(cmdv[0]), ...cmdv.slice(1)], below);
         db.run("UPDATE runs SET pane=?, status='running' WHERE id=?", [pane, runId]);
         if (!h.launch) {
           // ponytail: agents settle to idle when ready; plain TUIs get a fixed 8s
@@ -593,13 +627,13 @@ async function main(args: string[]) {
         return console.log(`run #${runId} in terminal ${pane}`);
       }
       const envArgs = Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]);
-      const made = mode === "tab"
+      const made = place === "tab"
         ? sh(["herdr", "tab", "create", "--cwd", cwd, "--label", `${t.id} ${role}`, ...envArgs, "--no-focus"])
-        : sh(["herdr", "pane", "split", ...(below ? ["--pane", below, "--direction", "down"] : ["--current", "--direction", "right", "--ratio", "0.5"]),
+        : sh(["herdr", "pane", "split", ...(below ? ["--pane", below, "--direction", place] : ["--current", "--direction", "right", "--ratio", "0.5"]),
           "--cwd", cwd, ...envArgs, "--no-focus"]);
       if (!made.ok) die(`herdr: ${made.err || made.out}`);
       const res = JSON.parse(made.out).result;
-      const pane = (mode === "tab" ? res.root_pane : res.pane).pane_id;
+      const pane = (place === "tab" ? res.root_pane : res.pane).pane_id;
       db.run("UPDATE runs SET pane=?, status='running' WHERE id=?", [pane, runId]);
       background("_watch", runId, cwd); // before the agent starts, so its first turn is watched too
       const cmdv = argv(h, "interactive", model, sid, h.launch ? prompt : undefined, effort);

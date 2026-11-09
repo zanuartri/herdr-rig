@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 - `rig update`: reinstalls from GitHub, or pulls a git checkout, and refreshes the board mod.
+- A contributors list in the README, redrawn by a workflow onto the `contributors` branch; bot and AI agent accounts are left out.
 - A once-a-day check for a newer release; `rig ls`, `new` and `dispatch` print one line when there is one (`RIG_NO_UPDATE_CHECK=1` turns it off).
 
 ### Changed

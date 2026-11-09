@@ -132,6 +132,14 @@ rig clean [T-3] [--force] · rig install [harness…] · rig skill manager|worke
 
 Issues and PRs are welcome. Keep it small: logic that is judgement belongs in `skills/`, and `rig.ts` only keeps state and launches runs. Run `bun test` before sending a change.
 
+## Contributors
+
+Thanks to everyone who has helped build rig.
+
+[![contributors](https://raw.githubusercontent.com/zanuartri/herdr-rig/contributors/contributors.svg)](https://github.com/zanuartri/herdr-rig/graphs/contributors)
+
+<sub>Updated automatically. Bot and AI agent accounts are left out.</sub>
+
 ## License
 
 [MIT](LICENSE) © Zanuar Tri Romadon

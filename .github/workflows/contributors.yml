@@ -1,0 +1,29 @@
+name: contributors
+# Redraws contributors.svg (people only, no bots or AI agents) onto the `contributors` branch, which the README shows.
+# It never touches main, so branch protection stays as it is.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  draw:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun .github/contributors.ts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: publish to the contributors branch
+        run: |
+          mkdir out && mv contributors.svg out/ && cd out
+          git init -q -b contributors
+          git -c user.name="github-actions" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            add contributors.svg
+          git -c user.name="github-actions" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "contributors.svg"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" contributors

@@ -318,7 +318,9 @@ async function main(args: string[]) {
   // the same board as data, for the herdr-app mod (mods/rig-board)
   function boardJson() {
     const tickets = db.query(`SELECT * FROM tickets ${o.mine ? "WHERE manager=?" : ""} ORDER BY created`).all(...(o.mine ? [(o.of as string) ?? me] : [])) as any[];
-    return { settings: boardSettings(), repo: root.split(/[\\/]/).pop(), groups: GROUPS.map(([title]) => ({ title, tickets: tickets
+    // count is the whole group; tickets may be cut (Done sends only its last 5 unless --all)
+    return { settings: boardSettings(), repo: root.split(/[\\/]/).pop(), groups: GROUPS.map(([title]) => ({ title,
+      count: tickets.filter(t => groupOf(t) === title).length, tickets: tickets
       .filter(t => groupOf(t) === title)
       .slice(title === "Done" && !o.all ? -5 : 0)
       .map(t => {

@@ -210,7 +210,7 @@ export default class RigBoard extends View {
         .on_click((_e, cx) => { folded ? this.folded.delete(g.title) : this.folded.add(g.title); cx.notify(); })
         .child(div().size(6).rounded_full().flex_none().bg(KEY[g.title] === "idle" || KEY[g.title] === "dim" || KEY[g.title] === "queued" ? t.dim : t[KEY[g.title]]))
         .child(div().flex_none().text_size(12.5).font_semibold().text_color(folded ? t.muted : t.foreground).child(g.title))
-        .child(div().flex_none().text_size(12).text_color(t.dim).child(String(g.tickets.length)))
+        .child(div().flex_none().text_size(12).text_color(t.dim).child(String(g.count ?? g.tickets.length)))
         .child(div().flex_1())
         .child(svg(ICON(folded ? "chevron-right" : "chevron-down")).size(11).flex_none().text_color(t.dim)))
       .when(!folded, (el) => el
@@ -219,7 +219,11 @@ export default class RigBoard extends View {
           div().id(`more-${g.title}`).pl(62).h(20).flex().items_center().cursor_pointer()
             .text_size(11).text_color(t.dim).hover((s) => s.text_color(t.foreground))
             .on_click((_e, cx) => { open ? this.expanded.delete(g.title) : this.expanded.add(g.title); cx.notify(); })
-            .child(hidden > 0 ? `${hidden} more` : "less"))));
+            .child(hidden > 0 ? `${hidden} more` : "less")))
+        // older Done tickets never reach the board; say how many and where to see them
+        .when((g.count ?? 0) > g.tickets.length, (el) => el.child(
+          div().pl(62).h(20).flex().items_center().text_size(11).text_color(t.dim)
+            .child(`${g.count - g.tickets.length} older · rig ls --all`))));
   }
 
   render(cx) {

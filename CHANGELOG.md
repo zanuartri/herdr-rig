@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- The app board showed Done as 5 however many tickets were done. It now shows the real count, and how many older ones `rig ls --all` lists.
+
 ## [0.1.2] - 2026-11-09
 
 Upgrading from 0.1.0 or 0.1.1: run `rig update`, then `rig install` once. That swaps the copied skills for the short ones that follow rig from now on.

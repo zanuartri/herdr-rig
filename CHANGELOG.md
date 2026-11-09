@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- After a FIX verdict the board showed the ticket as "worker exited", because it looked at the reviewer that had just closed. It now shows the run that is still going.
+
 ## [0.1.3] - 2026-11-09
 
 ### Fixed

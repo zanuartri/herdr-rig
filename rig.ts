@@ -247,6 +247,8 @@ async function main(args: string[]) {
   function whoRun(id: number) { const r = db.query("SELECT ticket, role FROM runs WHERE id=?").get(id) as any; return `${r.ticket}/${r.role}`; }
   const lastRun = (t: string, role?: string) => db.query(`SELECT * FROM runs WHERE ticket=? COLLATE NOCASE ${role ? "AND role=?" : ""}
     ORDER BY id DESC LIMIT 1`).get(...(role ? [t, role] : [t])) as any;
+  // the board shows who is on a ticket now: its newest running run (a closed reviewer must not hide a working worker), else the last one
+  const boardRun = (t: string) => (db.query("SELECT * FROM runs WHERE ticket=? COLLATE NOCASE AND status='running' ORDER BY id DESC LIMIT 1").get(t) as any) ?? lastRun(t);
   const runOf = (target: string) => (/^\d+$/.test(target) ? db.query("SELECT * FROM runs WHERE id=?").get(Number(target)) : lastRun(target, o.role as string)) as any
     ?? die(`no run for ${target}`);
   const kill = (pid: number) => process.platform === "win32"
@@ -324,7 +326,7 @@ async function main(args: string[]) {
       .filter(t => groupOf(t) === title)
       .slice(title === "Done" && !o.all ? -5 : 0)
       .map(t => {
-        const r = title === "Done" ? null : lastRun(t.id);
+        const r = title === "Done" ? null : boardRun(t.id);
         const live = r ? (r.mode === "headless" ? r.status : mux.status(r.pane)) : "";
         const m = title === "Done" ? null : db.query("SELECT * FROM messages WHERE ticket=? ORDER BY id DESC LIMIT 1").get(t.id) as any;
         // what the agent is doing: its terminal title (agents set it to their current task), else the last message
@@ -370,7 +372,7 @@ async function main(args: string[]) {
       out += "\n " + c(g.col, c(1, head)) + c(90, "─".repeat(Math.max(0, W - head.length))) + "\n";
       for (const t of rows) {
         if (g.title === "Done") { out += " " + c(g.col, g.dot) + " " + c(90, fit(`${t.id}  ${t.title}`, W - 2)) + "\n"; continue; }
-        const r = lastRun(t.id);
+        const r = boardRun(t.id);
         const live = r ? (r.mode === "headless" ? r.status : cached(`s${r.pane}`, () => mux.status(r.pane))) : "";
         const on = r && live !== "gone" && !String(live).startsWith("exited") && r.status === "running";
         // mark: ! when stuck (ticket blocked, or the agent blocked/errored), ? when it is a question

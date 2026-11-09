@@ -123,6 +123,25 @@ test("a newer inbox listener takes over: the older one exits and the message rea
   expect(await new Response(newer.stdout).text()).toContain("exited (0)");
 }, 30000);
 
+test("the board shows the running worker, not a reviewer that already closed", () => {
+  const repo = tmp("rig-");
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  Bun.spawnSync(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "init"]);
+  const env = { ...process.env, HERDR_PANE_ID: "", HC_TERMINAL_ID: "", RIG_RUN: "", RIG_ROOT: "" };
+  const rig = (...args: string[]) => Bun.spawnSync(["bun", join(import.meta.dir, "rig.ts"), ...args], { cwd: repo, env }).stdout.toString();
+  rig("new", "fix after review");
+  rig("set", "harness.slow", JSON.stringify({ model: [], headless: ["bun", "-e", "setTimeout(() => {}, 20000)"] }));
+  rig("dispatch", "T-1", "--harness", "slow", "--mode", "headless", "--no-worktree");        // run 1: worker, still going
+  rig("dispatch", "T-1", "--role", "reviewer", "--harness", "slow", "--mode", "headless");   // run 2: reviewer
+  rig("close", "2");                                                                          // FIX sent, reviewer closed
+  rig("edit", "T-1", "status=working");
+  const json = JSON.parse(rig("board", "--json"));
+  const t = json.groups.find((g: any) => g.title === "Working").tickets[0];
+  expect(t.run.role).toBe("worker");
+  expect(t.orphan).toBe(false);
+  rig("close", "T-1");
+}, 30000);
+
 test("no test followed the inherited RIG_ROOT", () => {
   expect(require("node:fs").existsSync(join(decoy, ".rig"))).toBe(false);
 });

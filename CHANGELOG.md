@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.2] - 2026-11-09
+
+Upgrading from 0.1.0 or 0.1.1: run `rig update`, then `rig install` once. That swaps the copied skills for the short ones that follow rig from now on.
 
 ### Added
 - `rig update`: reinstalls from GitHub, or pulls a git checkout, and refreshes the board mod.
@@ -39,5 +41,6 @@ First public release.
 - The board, as a native herdr-app mod and as a terminal board with spinners and an activity feed.
 - CI on Linux, macOS and Windows.
 
+[0.1.2]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.2
 [0.1.1]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.1
 [0.1.0]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.0

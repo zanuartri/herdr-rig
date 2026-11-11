@@ -1,6 +1,7 @@
 // rig board for the Herdr app: tickets grouped by what they need from you. Data comes from `rig board --json`;
 // live agent status and icons come from Herdr itself (terminals()), so those update without polling.
-// props: { rig: "<path to rig.ts>", root: "<repo>" }. Opened by `rig board --open` as a pane beside the manager.
+// props: { rig: "<path to rig.ts>", root: "<repo>", bun: "<bun binary>" } (an app started from the dock may not have bun on PATH). Opened by `rig board --open` as a pane beside the manager.
+// props: { rig, root, hub: true }: every registered repo, by story then repo (`rig board --hub --json`). Opened by `rig board --hub --open`.
 // Look: neutral and dense. The only color is the small status mark.
 
 import { View, div, svg, image } from "gpui-kit";
@@ -34,7 +35,7 @@ export default class RigBoard extends View {
     this.data = null;
     this.width = 400;
     this.error = "";
-    this.folded = new Set(["To do", "Done"]);
+    this.toggled = new Set(); // groups opened or folded by hand; To do and Done start folded
     this.expanded = new Set();
     this.seen = new Set(JSON.parse(localStorage.getItem("seen") ?? "[]")); // needs-you tickets already notified
     cx.timer.every(2000, (cx) => this.refresh(cx));
@@ -44,33 +45,46 @@ export default class RigBoard extends View {
 
   refresh(cx) {
     const p = props() ?? {};
+    if (this.busy) return; // a slow refresh (many repos on the hub) must not stack up or land out of order
+    this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const r = await exec("bun", [p.rig, "board", "--json", "--hc"], { cwd: p.root });
+        const args = [p.rig, "board", "--json", "--hc", ...(p.hub ? ["--hub"] : [])];
+        // p.bun is the bun rig ran on; after a bun upgrade that path can be gone, so fall back to PATH
+        const r = await exec(p.bun ?? "bun", args, { cwd: p.root }).catch(() => exec("bun", args, { cwd: p.root }));
         if (r.code) throw new Error(r.stderr.trim() || `rig exited ${r.code}`);
         if (r.stdout === this.raw && !this.error) return; // nothing changed: skip the redraw
         this.raw = r.stdout;
         this.data = JSON.parse(r.stdout);
         this.error = "";
-        this.alert(this.data);
+        this.alert();
       } catch (e) {
         this.error = String(e.message ?? e);
+      } finally {
+        this.busy = false;
       }
       cx.notify();
     });
   }
 
   // a toast the first time a ticket needs you; clicking it goes to the manager
-  alert(data) {
-    for (const x of data.groups.find((g) => g.title === "Needs you")?.tickets ?? []) {
-      const key = `${x.id}:${x.noteAt}`;
+  alert() {
+    for (const x of this.flat().find((g) => g.title === "Needs you")?.tickets ?? []) {
+      const key = `${x.repoPath ?? ""}${x.id}:${x.noteAt}`;
       if (this.seen.has(key)) continue;
       this.seen.add(key);
       const manager = this.manager(x);
-      notify({ title: `${x.id} needs you`, body: x.note || x.title, level: "warning",
+      notify({ title: `${x.repo ? `${x.repo} ` : ""}${x.id} needs you`, body: x.note || x.title, level: "warning",
         ...(manager ? { action: { name: "pane.focus", args: { terminal: manager } } } : {}) });
     }
     localStorage.setItem("seen", JSON.stringify([...this.seen].slice(-200)));
+  }
+
+  // the groups across the whole board: one repo's, or every repo's on the hub (tickets tagged with their repo)
+  flat() {
+    if (!this.data?.hub) return ORDER.map((n) => this.data?.groups.find((g) => g.title === n)).filter(Boolean);
+    return ORDER.map((title) => ({ title, tickets: this.data.stories.flatMap((s) => s.repos.flatMap((r) =>
+      (r.groups.find((g) => g.title === title)?.tickets ?? []).map((x) => ({ ...x, repo: r.name, repoPath: r.path }))) ) }));
   }
 
   manager(x) { return x.manager?.startsWith("manager:") ? x.manager.slice(8) : null; }
@@ -105,11 +119,11 @@ export default class RigBoard extends View {
   // right column. Top: the one button that moves focus (Answer, Review, Open), else the age.
   // Bottom: who is on it (role, harness with icon, model, effort), else the age.
   // Only the button changes focus; clicking the card itself does nothing, so the board never yanks you away.
-  side(t, key, x, glyph, c, goto, stuck) {
+  side(t, key, x, glyph, c, goto, stuck, scope = "") {
     const label = !goto ? null : key === "blocked" ? (x.status === "blocked" ? "Unblock" : "Answer") : key === "done" ? "Review" : "Open";
     const age = div().h(18).flex().items_center().text_size(11).text_color(t.dim).child(ago(x.run?.started ?? x.noteAt) || " ");
     const strong = key === "blocked" || key === "done";
-    const button = label && h_flex().id(`go-${x.id}`).h(18).px(7).gap(3).rounded(5).items_center().cursor_pointer()
+    const button = label && h_flex().id(`go-${scope}${x.id}`).h(18).px(7).gap(3).rounded(5).items_center().cursor_pointer()
       .bg(strong ? alpha(c, "2e") : t.raised).hover((h) => h.bg(strong ? alpha(c, "48") : t.hover))
       .text_size(11).font_semibold().text_color(strong ? c : t.foreground)
       .on_click(() => run("pane.focus", { terminal: goto }))
@@ -148,7 +162,7 @@ export default class RigBoard extends View {
       .when(!!st.reviewer, (el) => el.child(item("search", "reviewer", st.reviewer, false)));
   }
 
-  row(t, g, x) {
+  row(t, g, x, scope = "") {
     const key = KEY[g.title];
     const done = key === "dim";
     const term = x.run?.pane ? terminals().find((y) => y.address === x.run.pane) : null;
@@ -166,7 +180,7 @@ export default class RigBoard extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(13).text_color(done ? t.dim : t.foreground)
         .when(!done, (d) => d.font_semibold()).child(x.title))
 ;
-    if (done) return h_flex().id(`t-${x.id}`).flex_none().px(8).py(3).rounded(5).hover((h) => h.bg(t.hover)).child(title.flex_1());
+    if (done) return h_flex().id(`t-${scope}${x.id}`).flex_none().px(8).py(3).rounded(5).hover((h) => h.bg(t.hover)).child(title.flex_1());
     // left line 2: what the agent is doing, or the last message
     const branch = x.branch && h_flex().flex_none().gap(4).items_center()
       .child(svg(ICON("git-branch")).size(11).text_color(t.dim))
@@ -190,35 +204,37 @@ export default class RigBoard extends View {
       .bg(key === "idle" || (key === "queued" && !stuck) ? t.raised : alpha(c, "26"))
       .when(key === "blocked" || !!stuck, (el) => el.loop("opacity", { from: 0.7, to: 1, period: 1600 }))
       .child(icon);
-    return h_flex().id(`t-${x.id}`).flex_none().min_w(0).gap(10).items_center().pl(7).pr(10).py(7).rounded(10)
+    return h_flex().id(`t-${scope}${x.id}`).flex_none().min_w(0).gap(10).items_center().pl(7).pr(10).py(7).rounded(10)
       .bg(t.raised ? alpha(t.raised, "aa") : t.background).border(1).border_color(t.border)
       .hover((h) => h.bg(t.hover).border_color(t.input))
       .child(tile)
       .child(v_flex().flex_1().min_w(0).gap(2).child(title).when(!!line2, (el) => el.child(line2)))
-      .child(this.side(t, key, x, glyph, c, goto, stuck));
+      .child(this.side(t, key, x, glyph, c, goto, stuck, scope));
   }
 
-  group(t, g) {
-    const folded = this.folded.has(g.title);
-    const open = this.expanded.has(g.title);
+  // scope keeps ids and fold state apart when several repos each have a Working group (the hub board)
+  group(t, g, scope = "") {
+    const k = scope + g.title;
+    const folded = (g.title === "To do" || g.title === "Done") !== this.toggled.has(k);
+    const open = this.expanded.has(k);
     const rows = open ? g.tickets : g.tickets.slice(0, LIMIT[g.title]);
     const hidden = g.tickets.length - rows.length;
     return v_flex().flex_none().gap(g.title === "Done" ? 0 : 5)
       // group header: status dot, plain label, the count as a quiet number, a hairline to the chevron
-      .child(h_flex().id(`g-${g.title}`).px(6).h(28).gap(8).items_center().cursor_pointer()
+      .child(h_flex().id(`g-${k}`).px(6).h(28).gap(8).items_center().cursor_pointer()
         .hover((h) => h.text_color(t.foreground))
-        .on_click((_e, cx) => { folded ? this.folded.delete(g.title) : this.folded.add(g.title); cx.notify(); })
+        .on_click((_e, cx) => { this.toggled.has(k) ? this.toggled.delete(k) : this.toggled.add(k); cx.notify(); })
         .child(div().size(6).rounded_full().flex_none().bg(KEY[g.title] === "idle" || KEY[g.title] === "dim" || KEY[g.title] === "queued" ? t.dim : t[KEY[g.title]]))
         .child(div().flex_none().text_size(12.5).font_semibold().text_color(folded ? t.muted : t.foreground).child(g.title))
         .child(div().flex_none().text_size(12).text_color(t.dim).child(String(g.count ?? g.tickets.length)))
         .child(div().flex_1())
         .child(svg(ICON(folded ? "chevron-right" : "chevron-down")).size(11).flex_none().text_color(t.dim)))
       .when(!folded, (el) => el
-        .children(rows.map((x) => this.row(t, g, x)))
+        .children(rows.map((x) => this.row(t, g, x, scope)))
         .when(hidden > 0 || (open && g.tickets.length > LIMIT[g.title]), (el) => el.child(
-          div().id(`more-${g.title}`).pl(62).h(20).flex().items_center().cursor_pointer()
+          div().id(`more-${k}`).pl(62).h(20).flex().items_center().cursor_pointer()
             .text_size(11).text_color(t.dim).hover((s) => s.text_color(t.foreground))
-            .on_click((_e, cx) => { open ? this.expanded.delete(g.title) : this.expanded.add(g.title); cx.notify(); })
+            .on_click((_e, cx) => { open ? this.expanded.delete(k) : this.expanded.add(k); cx.notify(); })
             .child(hidden > 0 ? `${hidden} more` : "less")))
         // older Done tickets never reach the board; say how many and where to see them
         .when((g.count ?? 0) > g.tickets.length, (el) => el.child(
@@ -226,9 +242,24 @@ export default class RigBoard extends View {
             .child(`${g.count - g.tickets.length} older · rig ls --all`))));
   }
 
+  // hub board: a section per story, a repo heading inside it, then that repo's groups as usual
+  stories(t) {
+    return this.data.stories.map((s) => v_flex().flex_none().gap(6)
+      .child(h_flex().px(4).h(26).gap(8).items_center().border_b(1).border_color(t.border)
+        .child(div().flex_none().text_size(12).font_bold().text_color(s.story ? BRAND : t.muted).child(s.story ? `Story ${s.story}` : "No story"))
+        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(s.repos.map((r) => r.name).join(" · "))))
+      .children(s.repos.map((r) => v_flex().flex_none().gap(4).pl(4)
+        .child(h_flex().h(22).gap(6).items_center()
+          .child(svg(ICON("git-branch")).size(11).text_color(t.dim))
+          .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(r.name)))
+        .children(ORDER.map((n) => r.groups.find((g) => g.title === n)).filter(Boolean)
+          .map((g) => this.group(t, g, `${s.story ?? ""}/${r.path}/`))))));
+  }
+
   render(cx) {
     const t = theme();
-    const groups = ORDER.map((n) => this.data?.groups.find((g) => g.title === n)).filter((g) => g?.tickets.length);
+    const hub = !!this.data?.hub;
+    const groups = this.flat().filter((g) => g?.tickets.length);
     const live = new Map(terminals().map((y) => [y.address, y]));
     const working = groups.find((g) => g.title === "Working")?.tickets ?? [];
     const running = working.map((x) => live.get(x.run?.pane)?.program).filter((p) => p?.icon && p.agent);
@@ -244,7 +275,7 @@ export default class RigBoard extends View {
             .child(svg(LOGO).size(14).text_color(BRAND)))
           .child(div().text_size(14).font_bold().text_color(BRAND).child("rig"))
           .child(div().text_size(13).text_color(t.dim).child("/"))
-          .child(div().text_size(13.5).font_bold().text_color(t.foreground).child(this.data?.repo ?? "")))
+          .child(div().text_size(13.5).font_bold().text_color(t.foreground).child(hub ? "hub" : this.data?.repo ?? "")))
         .child(h_flex().flex_1().min_w(0).gap(12).items_center().overflow_hidden().pl(4)
           .children(stats.map(([n, label]) => h_flex().flex_none().gap(4).items_baseline()
             .child(div().text_size(12.5).font_bold().text_color(t.foreground).child(String(n)))
@@ -260,10 +291,11 @@ export default class RigBoard extends View {
       .when(!!this.error, (el) => el.child(div().mx(8).mt(8).px(8).py(6).rounded(5).border(1).border_color(t.border)
         .text_size(11).text_color(t.muted).child(this.error)))
       .child(v_flex().id("list").flex_1().overflow_y_scrollbar().px(8).py(6).gap(8)
-        .children(groups.map((g) => this.group(t, g)))
+        .when(hub, (el) => el.children(this.stories(t)))
+        .when(!hub, (el) => el.children(groups.map((g) => this.group(t, g))))
         .when(!!this.data && !groups.length, (el) => el.child(v_flex().py(40).gap(8).items_center()
           .child(svg(LOGO).size(28).text_color(alpha(BRAND, "aa")))
           .child(div().text_size(13).font_semibold().text_color(t.foreground).child("The rig is quiet"))
-          .child(div().text_size(12).text_color(t.dim).child("Tell the manager what needs doing.")))));
+          .child(div().text_size(12).text_color(t.dim).child(hub ? "No open tickets in any registered repo." : "Tell the manager what needs doing.")))));
   }
 }

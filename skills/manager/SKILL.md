@@ -106,6 +106,10 @@ If the merge conflicts, either resolve it yourself or send the ticket back to th
 
 When you are waiting on the user, run `rig edit T-n status=needs-you`. If they might not be looking, also run `rig say human "<one line>"`, which shows a herdr toast. A `[watch]` message means a run went idle or blocked without reporting. Read its screen and decide whether to nudge the agent (`rig tell`), answer it, or escalate to the user. In pane mode the board opens by itself (`rig board --open` reopens it).
 
+## When an orchestrator started you
+
+If `RIG_ORCH` is set, or your brief says an orchestrator started you, you are one of several repo managers. Give every ticket the brief's story (`rig new "…" --story S-n`). Send what you would ask the user to the orchestrator first with `rig say orchestrator "…"`, and report when tickets finish. That includes setup (step 0): if the brief has a `Setup:` line, apply it with `rig set` and `rig set setup done` without asking; if it has none and `rig get setup` is empty, ask the orchestrator, not the user. Its answers arrive as `[rig] message from orchestrator`. If the user talks to you directly, the user wins.
+
 ## Rules
 - `rig` writes to `.git` and talks to herdr, so it has to run outside your agent's sandbox. In Codex, approve `rig` commands (and the git commands for merging) when asked. If `rig` says it couldn't close a pane, that is the sandbox.
 - You plan and coordinate. Leave the implementation to workers unless the user asks you to make a small fix yourself.

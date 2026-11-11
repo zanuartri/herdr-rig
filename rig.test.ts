@@ -1,8 +1,8 @@
 import { test, expect, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { argv, HARNESSES, slot, worktreePlan, deep } from "./rig.ts";
+import { join, basename } from "node:path";
+import { argv, HARNESSES, slot, worktreePlan, deep, openHub, launchCmd } from "./rig.ts";
 
 // every temp repo and home a test makes goes when the run ends
 const made: string[] = [];
@@ -13,6 +13,20 @@ afterAll(() => { for (const d of made) try { rmSync(d, { recursive: true, force:
 // A decoy RIG_ROOT proves that: the last test checks that nothing was written there.
 const decoy = tmp("rig-decoy-");
 process.env.RIG_ROOT = decoy;
+// `rig new` registers each repo in the hub (<RIG_HOME>/.rig/hub.db); keep it out of the real home
+const hubHome = tmp("rig-hubhome-");
+process.env.RIG_HOME = hubHome;
+const mkrepo = () => {
+  const repo = tmp("rig-");
+  Bun.spawnSync(["git", "init", "-q", repo]);
+  Bun.spawnSync(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "init"]);
+  return repo;
+};
+const rigIn = (cwd: string, args: string[], env: Record<string, string> = {}) => {
+  const p = Bun.spawnSync(["bun", join(import.meta.dir, "rig.ts"), ...args],
+    { cwd, env: { ...process.env, HERDR_PANE_ID: "", HC_TERMINAL_ID: "", RIG_RUN: "", RIG_ROOT: "", ...env } });
+  return p.stdout.toString().trim() + p.stderr.toString().trim();
+};
 
 test("argv expands model and sid, drops model when unset", () => {
   expect(argv(HARNESSES.claude, "headless", "opus", "S", "go")).toEqual(
@@ -60,6 +74,8 @@ test("base branch, squash landing, --after and cleanup", async () => {
   expect(rig("new")).toContain("usage"); // no title, no ticket
   expect(rig("new", "a")).toBe("T-1");
   expect(rig("new", "b", "--after", "T-1", "--base", "main")).toBe("T-2");
+  expect(rig("new", "c", "--after", "T-1 T-2")).toBe("T-3"); // space-separated list
+  expect(rig("board", "--json")).toContain('"waiting":["T-1 (open)","T-2 (open)"]');
   // the worker commits a file on its branch
   rig("set", "harness.fake", JSON.stringify({ model: [], headless: ["bun", "-e",
     "require('fs').writeFileSync('f','x'); for (const a of [['add','f'],['commit','-qm','f']]) Bun.spawnSync(['git',...a])"] }));
@@ -89,6 +105,7 @@ test("install copies renamed skills only into harnesses that exist", () => {
   const skill = require("node:fs").readFileSync(join(home, ".codex/skills/rig-worker/SKILL.md"), "utf8");
   expect(skill).toContain("name: rig-worker");
   expect(skill).toContain("rig skill worker"); // a pointer, so an update needs no reinstall
+  expect(require("node:fs").readFileSync(join(home, ".codex/skills/rig-orchestrator/SKILL.md"), "utf8")).toContain("rig skill orchestrator");
 });
 
 test("install puts Claude skills under CLAUDE_CONFIG_DIR when it is set", () => {
@@ -144,6 +161,124 @@ test("the board shows the running worker, not a reviewer that already closed", (
   expect(Bun.spawnSync(["bun", join(import.meta.dir, "rig.ts"), "inbox"], { cwd: repo, env: { ...env, RIG_RUN: "1" } }).stdout.toString()).toContain("fix it");
   rig("close", "T-1");
 }, 30000);
+
+test("rig new registers the repo in the hub and keeps its story", () => {
+  const repo = mkrepo();
+  expect(rigIn(repo, ["new", "a", "--story", "S-1"])).toBe("T-1");
+  rigIn(repo, ["new", "b"]);
+  expect(rigIn(repo, ["show", "T-1"])).toContain("story: S-1");
+  rigIn(repo, ["edit", "T-2", "story=S-2"]);
+  expect(rigIn(repo, ["show", "T-2"])).toContain("story: S-2");
+  const rows = openHub().query("SELECT * FROM repos WHERE name=?").all(basename(repo)) as any[];
+  expect(rows.length).toBe(1); // idempotent across rig new calls
+});
+
+test("hub: status events and say orchestrator reach the hub inbox; tell <repo>:manager reaches the manager", async () => {
+  const a = mkrepo(), b = mkrepo(), out = tmp("rig-out-"); // the orchestrator runs from a folder that is not a repo
+  rigIn(a, ["new", "x"]); rigIn(b, ["new", "y"]);
+  rigIn(out, ["inbox", "--orch"]); // drain what other tests left in the shared hub
+  const quiet = mkrepo(), qn = basename(quiet);
+  rigIn(quiet, ["new", "q"]);
+  if (!openHub().query("SELECT 1 FROM settings WHERE k='listener.orchestrator'").get()) { // no orchestrator yet: no events
+    rigIn(quiet, ["edit", "T-1", "status=review"]);
+    expect(openHub().query("SELECT 1 FROM messages WHERE frm=?").get(`${qn}:T-1`)).toBeNull();
+  }
+  const listener = Bun.spawn(["bun", join(import.meta.dir, "rig.ts"), "inbox", "--orch", "--wait"],
+    { cwd: out, env: { ...process.env, HERDR_PANE_ID: "", HC_TERMINAL_ID: "", RIG_ROOT: "" }, stdout: "pipe" });
+  await Bun.sleep(500);
+  rigIn(b, ["edit", "T-1", "status=needs-you"]);
+  await listener.exited;
+  expect(await new Response(listener.stdout).text()).toContain(`${basename(b)}:T-1 [T-1]: T-1 is needs-you: y`);
+  rigIn(a, ["edit", "T-1", "status=working"]); // not an event
+  rigIn(a, ["say", "orchestrator", "Q: ship A first?"]);
+  const inbox = rigIn(out, ["inbox", "--orch"]);
+  expect(inbox).toContain(`${basename(a)}:manager: Q: ship A first?`);
+  expect(inbox).not.toContain("working");
+  expect(rigIn(out, ["tell", `${basename(a)}:manager`, "go"])).toContain("no manager yet");
+  openHub().run("UPDATE repos SET manager='local' WHERE name=?", [basename(a)]);
+  rigIn(out, ["tell", `${basename(a)}:manager`, "yes, A first"]);
+  expect(rigIn(a, ["inbox"])).toContain("orchestrator: yes, A first");
+}, 30000);
+
+test("board --orch shows every registered repo, by story then repo", () => {
+  const a = mkrepo(), b = mkrepo(), out = tmp("rig-out-");
+  const [na, nb] = [a, b].map(r => basename(r));
+  rigIn(a, ["new", "api change", "--story", "S-HUB"]);
+  rigIn(b, ["new", "client change", "--story", "S-HUB"]);
+  rigIn(b, ["new", "loose end"]);
+  rigIn(b, ["edit", "T-1", "status=needs-you"]);
+  rigIn(a, ["new", "finished", "--story", "S-HUB"]); rigIn(a, ["edit", "T-2", "status=done"]);
+  const board = rigIn(out, ["board", "--orch", "--once"]);
+  const story = board.indexOf("STORY S-HUB"), none = board.indexOf("NO STORY");
+  expect(story).toBeGreaterThan(-1);
+  expect(board.indexOf("api change")).toBeGreaterThan(story);
+  expect(board.indexOf("client change")).toBeGreaterThan(story);
+  expect(board.indexOf("client change")).toBeLessThan(none);
+  expect(board.indexOf("loose end")).toBeGreaterThan(none);
+  expect(board.slice(story, none)).toContain(na);
+  expect(board.slice(story, none)).toContain(nb);
+  expect(board).toContain("needs-you");
+  expect(board).not.toContain("finished");
+  expect(rigIn(out, ["board", "--orch", "--once", "--all"])).toContain("finished");
+  // the app board's data: each repo's own cards, regrouped by story
+  const json = JSON.parse(rigIn(out, ["board", "--orch", "--json"]));
+  const s = json.stories.find((x: any) => x.story === "S-HUB");
+  expect(s.repos.map((r: any) => r.name).sort()).toEqual([na, nb].sort());
+  expect(s.repos.find((r: any) => r.name === nb).groups.find((g: any) => g.title === "Needs you").tickets[0].title).toBe("client change");
+  expect(json.stories.at(-1).story).toBeNull(); // no story goes last
+  expect(JSON.stringify(json.stories.at(-1))).toContain("loose end");
+}, 30000);
+
+test("--story narrows the hub to that story's repos and tickets; hub rm drops a repo", () => {
+  const a = mkrepo(), b = mkrepo(), c = mkrepo(), out = tmp("rig-out-");
+  const [na, nb, nc] = [a, b, c].map(r => basename(r));
+  rigIn(a, ["new", "story work", "--story", "S-ONLY"]);
+  rigIn(a, ["new", "other work"]);
+  rigIn(b, ["new", "later"]); rigIn(b, ["edit", "T-1", "story=S-ONLY"]); // edit links the repo too
+  rigIn(c, ["new", "unrelated"]);
+  const board = rigIn(out, ["board", "--orch", "--once", "--story", "S-ONLY"]);
+  expect(board).toContain("story work"); expect(board).toContain("later");
+  expect(board).not.toContain("other work"); expect(board).not.toContain(nc);
+  const json = JSON.parse(rigIn(out, ["board", "--orch", "--json", "--story", "S-ONLY"]));
+  expect(json.stories.map((s: any) => s.story)).toEqual(["S-ONLY"]);
+  expect(json.stories[0].repos.map((r: any) => r.name).sort()).toEqual([na, nb].sort());
+  // the inbox on a story only hands out that story's repos' messages; the rest stay for the plain inbox
+  rigIn(a, ["say", "orchestrator", "from a"]); rigIn(c, ["say", "orchestrator", "from c"]);
+  const mine = rigIn(out, ["inbox", "--orch", "--story", "S-ONLY"]);
+  expect(mine).toContain("from a"); expect(mine).not.toContain("from c");
+  expect(rigIn(out, ["inbox", "--orch"])).toContain("from c");
+  // a repo shared by two stories: tagged messages go to their own story's orchestrator only
+  rigIn(a, ["new", "second story", "--story", "S-TWO"]);
+  rigIn(a, ["say", "orchestrator", "--story", "S-TWO", "for two"]);
+  openHub().run("INSERT OR REPLACE INTO settings VALUES('listener.orchestrator:S-ONLY', '0')"); // an orchestrator has listened
+  rigIn(a, ["edit", "T-1", "status=needs-you"]); // the event carries T-1's story, S-ONLY
+  const one = rigIn(out, ["inbox", "--orch", "--story", "S-ONLY"]);
+  expect(one).toContain("T-1 is needs-you"); expect(one).not.toContain("for two");
+  const two = rigIn(out, ["inbox", "--orch", "--story", "S-TWO"]);
+  expect(two).toContain("for two"); expect(two).not.toContain("needs-you");
+  const both = rigIn(out, ["board", "--orch", "--once", "--story", "S-ONLY,S-TWO"]); // one session, two stories
+  expect(both).toContain("STORY S-ONLY"); expect(both).toContain("STORY S-TWO"); expect(both).not.toContain("other work");
+  rigIn(out, ["story", "S-ONLY", "Link expiry"]);
+  expect(rigIn(out, ["board", "--orch", "--once", "--story", "S-ONLY"])).toContain("STORY S-ONLY · Link expiry");
+  expect(JSON.parse(rigIn(out, ["board", "--orch", "--json", "--story", "S-ONLY"])).stories[0].title).toBe("Link expiry");
+  expect(rigIn(out, ["repos"])).toContain(nb);
+  rigIn(out, ["repos", "rm", nb]);
+  expect(rigIn(out, ["repos"])).not.toContain(nb);
+}, 30000);
+
+test("launch: the manager starts on its skill and brief; bad input stops before any pane opens", () => {
+  const { prompt, cmd } = launchCmd(HARNESSES.claude, "/b/brief.md", "opus", "", "S");
+  expect(cmd).toEqual(["claude", "--dangerously-skip-permissions", "--session-id", "S", "--model", "opus", prompt]);
+  expect(prompt).toContain("rig skill manager");
+  expect(prompt).toContain("/b/brief.md");
+  expect(prompt).toContain("rig say orchestrator");
+  expect(launchCmd(HARNESSES.commandcode, "/b.md", "", "", "S").cmd).not.toContain(prompt); // typed in after start instead
+  const out = tmp("rig-out-"), repo = mkrepo();
+  expect(rigIn(out, ["launch", out, "--brief", "x"])).toContain("is not a git repo");
+  expect(rigIn(out, ["launch", join(out, "gone"), "--brief", "x"])).toContain("no folder");
+  expect(rigIn(out, ["launch", repo])).toContain("--brief <file> is required");
+  expect(rigIn(out, ["launch", repo, "--brief", "nope.md"])).toContain("no brief at");
+});
 
 test("no test followed the inherited RIG_ROOT", () => {
   expect(require("node:fs").existsSync(join(decoy, ".rig"))).toBe(false);

@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-11
+
+### Added
+- Orchestrating several repos: one orchestrator session drives one manager per repo through a hub at `~/.rig/hub.db` (`$RIG_HOME/.rig/hub.db`). ([#7](https://github.com/zanuartri/herdr-rig/pull/7), thanks @raufimusaddiq)
+  - `rig launch <repo> --brief <file>` opens that repo's manager (tab or pane, focus unchanged) on the manager skill and the brief, with `RIG_ORCH` set.
+  - `rig inbox --orch [--wait]`: tickets in any registered repo (once an orchestrator has listened) turning `needs-you`, `blocked` or `review`, and `rig say orchestrator` from managers or workers.
+  - `rig tell <repo>:manager "…"` reaches a repo's manager with the usual focus-aware delivery.
+  - `rig board --orch` shows every registered repo, grouped by story, then repo. `rig board --orch --open` opens it in the herdr app board (a section per story, a heading per repo, the usual cards); `--json` gives its data.
+  - `rig new --story S-1` / `rig edit T-1 story=S-1`; `rig new` registers its repo (`rig repos`).
+  - `--story S` (or `S-1,S-2` for a session holding several) on `rig inbox --orch` and `rig board --orch`: only the repos working on that story (`rig launch` links a repo to its brief's `Story:` line; `rig new`/`edit` with a story do too) and only its tickets. `rig repos` lists the registry, `rig repos rm <repo>` drops a repo.
+  - One manager per repo: `rig launch` on a repo whose manager is still live sends it the brief instead of opening another. Messages to the orchestrator carry their story (the ticket's, or `rig say orchestrator --story S`), so two orchestrators sharing a repo each get their own.
+  - The orchestrator skill asks for the repo paths and checks them, and asks setup as one question (one proposal for all repos, or a one-line change per repo or role).
+  - The orchestrator board in the app: a finished story folds to one line; each repo shows its Needs you and Working cards, with its other groups on one line of counts.
+  - Stories have a title: the brief's `Story: S-7 Link expiry` line (or `rig story S-7 "Link expiry"`), shown on the orchestrator board.
+  - `rig-orchestrator` skill (`rig skill orchestrator`), installed by `rig install`; the manager skill says what to do when an orchestrator started it.
+
+### Fixed
+- The herdr app board showed "cannot run bun" when the app was started from the dock without bun on its PATH. rig now hands the board the bun it runs on, and every command rig starts itself uses that bun too. ([#7](https://github.com/zanuartri/herdr-rig/pull/7))
+- `--after "T-3 T-4"` (space-separated) queued forever: the list split on the letter "s" instead of whitespace. ([#7](https://github.com/zanuartri/herdr-rig/pull/7))
+
+### Changed
+- The board's settings line stays on one line: labels drop when the pane is narrow, worker and reviewer shorten with an ellipsis, and a model that repeats its harness name (`claude claude-sonnet-5-5`) reads `claude sonnet-5-5`.
+
 ## [0.2.0] - 2026-11-09
 
 ### Added
@@ -63,6 +86,7 @@ First public release.
 - The board, as a native herdr-app mod and as a terminal board with spinners and an activity feed.
 - CI on Linux, macOS and Windows.
 
+[0.3.0]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.3.0
 [0.2.0]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.2.0
 [0.1.4]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.4
 [0.1.3]: https://github.com/zanuartri/herdr-rig/releases/tag/v0.1.3

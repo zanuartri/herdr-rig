@@ -123,10 +123,11 @@ rig launch ~/src/web --brief web.md --mode pane
 rig inbox --hub --wait                                # returns when a ticket in any repo is needs-you, blocked or review,
                                                       # or a manager runs `rig say orchestrator "…"`
 rig tell api:manager "ship the endpoint first"        # typed into that manager's pane, focus-aware like any rig message
-rig board --hub                                       # every registered repo: by story, then repo
+rig board --hub --story S-12                          # that story's repos and tickets (no --story: every registered repo)
+rig hub [rm <repo>]                                   # the registry; rm drops a repo
 ```
 
-Tickets carry a story (`rig new "…" --story S-12`) so a cross-repo change reads as one group on the hub board. `rig new` registers its repo in the hub; nothing changes for a repo that is never orchestrated.
+Tickets carry a story (`rig new "…" --story S-12`) so a cross-repo change reads as one group on the hub board. `rig new` registers its repo in the hub; nothing changes for a repo that is never orchestrated. `rig launch` works on any git repo, rig history or not, and links it to the brief's `Story:` line, so `--story` on the inbox and the board shows only the repos and tickets of that change.
 
 ## Tested
 

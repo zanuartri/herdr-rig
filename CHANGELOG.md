@@ -11,6 +11,10 @@ All notable changes to this project are documented here. The format follows [Kee
   - `rig tell <repo>:manager "…"` reaches a repo's manager with the usual focus-aware delivery.
   - `rig board --hub` shows every registered repo, grouped by story, then repo. `rig board --hub --open` opens it in the herdr app board (hub mode: a section per story, a heading per repo, the usual cards); `--json` gives its data.
   - `rig new --story S-1` / `rig edit T-1 story=S-1`; `rig new` registers its repo in the hub.
+  - `--story S` on `rig inbox --hub` and `rig board --hub`: only the repos working on that story (`rig launch` links a repo to its brief's `Story:` line; `rig new`/`edit` with a story do too) and only its tickets. `rig hub` lists the registry, `rig hub rm <repo>` drops a repo.
+  - One manager per repo: `rig launch` on a repo whose manager is still live sends it the brief instead of opening another. Hub messages carry their story (the ticket's, or `rig say orchestrator --story S`), so two orchestrators sharing a repo each get their own.
+  - The orchestrator skill asks for the repo paths and checks them, and asks setup as one question (one proposal for all repos, or a one-line change per repo or role).
+  - The hub board in the app: a finished story folds to one line; each repo shows its Needs you and Working cards, with its other groups on one line of counts.
   - `rig-orchestrator` skill (`rig skill orchestrator`), installed by `rig install`; the manager skill says what to do when an orchestrator started it.
 
 ### Fixed

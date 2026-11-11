@@ -229,6 +229,38 @@ test("board --hub shows every registered repo, by story then repo", () => {
   expect(JSON.stringify(json.stories.at(-1))).toContain("loose end");
 }, 30000);
 
+test("--story narrows the hub to that story's repos and tickets; hub rm drops a repo", () => {
+  const a = mkrepo(), b = mkrepo(), c = mkrepo(), out = tmp("rig-out-");
+  const [na, nb, nc] = [a, b, c].map(r => basename(r));
+  rigIn(a, ["new", "story work", "--story", "S-ONLY"]);
+  rigIn(a, ["new", "other work"]);
+  rigIn(b, ["new", "later"]); rigIn(b, ["edit", "T-1", "story=S-ONLY"]); // edit links the repo too
+  rigIn(c, ["new", "unrelated"]);
+  const board = rigIn(out, ["board", "--hub", "--once", "--story", "S-ONLY"]);
+  expect(board).toContain("story work"); expect(board).toContain("later");
+  expect(board).not.toContain("other work"); expect(board).not.toContain(nc);
+  const json = JSON.parse(rigIn(out, ["board", "--hub", "--json", "--story", "S-ONLY"]));
+  expect(json.stories.map((s: any) => s.story)).toEqual(["S-ONLY"]);
+  expect(json.stories[0].repos.map((r: any) => r.name).sort()).toEqual([na, nb].sort());
+  // the inbox on a story only hands out that story's repos' messages; the rest stay for the plain inbox
+  rigIn(a, ["say", "orchestrator", "from a"]); rigIn(c, ["say", "orchestrator", "from c"]);
+  const mine = rigIn(out, ["inbox", "--hub", "--story", "S-ONLY"]);
+  expect(mine).toContain("from a"); expect(mine).not.toContain("from c");
+  expect(rigIn(out, ["inbox", "--hub"])).toContain("from c");
+  // a repo shared by two stories: tagged messages go to their own story's orchestrator only
+  rigIn(a, ["new", "second story", "--story", "S-TWO"]);
+  rigIn(a, ["say", "orchestrator", "--story", "S-TWO", "for two"]);
+  openHub().run("INSERT OR REPLACE INTO settings VALUES('listener.orchestrator:S-ONLY', '0')"); // an orchestrator has listened
+  rigIn(a, ["edit", "T-1", "status=needs-you"]); // the event carries T-1's story, S-ONLY
+  const one = rigIn(out, ["inbox", "--hub", "--story", "S-ONLY"]);
+  expect(one).toContain("T-1 is needs-you"); expect(one).not.toContain("for two");
+  const two = rigIn(out, ["inbox", "--hub", "--story", "S-TWO"]);
+  expect(two).toContain("for two"); expect(two).not.toContain("needs-you");
+  expect(rigIn(out, ["hub"])).toContain(nb);
+  rigIn(out, ["hub", "rm", nb]);
+  expect(rigIn(out, ["hub"])).not.toContain(nb);
+}, 30000);
+
 test("launch: the manager starts on its skill and brief; bad input stops before any pane opens", () => {
   const { prompt, cmd } = launchCmd(HARNESSES.claude, "/b/brief.md", "opus", "", "S");
   expect(cmd).toEqual(["claude", "--dangerously-skip-permissions", "--session-id", "S", "--model", "opus", prompt]);

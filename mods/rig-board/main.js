@@ -1,7 +1,7 @@
 // rig board for the Herdr app: tickets grouped by what they need from you. Data comes from `rig board --json`;
 // live agent status and icons come from Herdr itself (terminals()), so those update without polling.
 // props: { rig: "<path to rig.ts>", root: "<repo>", bun: "<bun binary>" } (an app started from the dock may not have bun on PATH). Opened by `rig board --open` as a pane beside the manager.
-// props: { rig, root, hub: true }: every registered repo, by story then repo (`rig board --hub --json`). Opened by `rig board --hub --open`.
+// props: { rig, root, hub: true }: every registered repo, by story then repo (a done story folds to a line) (`rig board --hub --json`). Opened by `rig board --hub --open`.
 // Look: neutral and dense. The only color is the small status mark.
 
 import { View, div, svg, image } from "gpui-kit";
@@ -35,7 +35,7 @@ export default class RigBoard extends View {
     this.data = null;
     this.width = 400;
     this.error = "";
-    this.toggled = new Set(); // groups opened or folded by hand; To do and Done start folded
+    this.toggled = new Set(); // groups opened or folded by hand; To do and Done start folded (on the hub, all but Needs you and Working)
     this.expanded = new Set();
     this.seen = new Set(JSON.parse(localStorage.getItem("seen") ?? "[]")); // needs-you tickets already notified
     cx.timer.every(2000, (cx) => this.refresh(cx));
@@ -49,7 +49,7 @@ export default class RigBoard extends View {
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const args = [p.rig, "board", "--json", "--hc", ...(p.hub ? ["--hub"] : [])];
+        const args = [p.rig, "board", "--json", "--hc", ...(p.hub ? ["--hub"] : []), ...(p.story ? ["--story", p.story] : [])];
         // p.bun is the bun rig ran on; after a bun upgrade that path can be gone, so fall back to PATH
         const r = await exec(p.bun ?? "bun", args, { cwd: p.root }).catch(() => exec("bun", args, { cwd: p.root }));
         if (r.code) throw new Error(r.stderr.trim() || `rig exited ${r.code}`);
@@ -215,7 +215,8 @@ export default class RigBoard extends View {
   // scope keeps ids and fold state apart when several repos each have a Working group (the hub board)
   group(t, g, scope = "") {
     const k = scope + g.title;
-    const folded = (g.title === "To do" || g.title === "Done") !== this.toggled.has(k);
+    const shut = this.data?.hub ? !["Needs you", "Working"].includes(g.title) : g.title === "To do" || g.title === "Done";
+    const folded = shut !== this.toggled.has(k);
     const open = this.expanded.has(k);
     const rows = open ? g.tickets : g.tickets.slice(0, LIMIT[g.title]);
     const hidden = g.tickets.length - rows.length;
@@ -242,18 +243,44 @@ export default class RigBoard extends View {
             .child(`${g.count - g.tickets.length} older · rig ls --all`))));
   }
 
-  // hub board: a section per story, a repo heading inside it, then that repo's groups as usual
+  // hub board: a section per story (a finished one folds to a line), a repo inside it. A repo shows its
+  // Needs you and Working cards; its other groups sit on one line of counts, each opening that group.
   stories(t) {
-    return this.data.stories.map((s) => v_flex().flex_none().gap(6)
-      .child(h_flex().px(4).h(26).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().flex_none().text_size(12).font_bold().text_color(s.story ? BRAND : t.muted).child(s.story ? `Story ${s.story}` : "No story"))
-        .child(div().flex_none().text_size(11.5).text_color(t.dim).child(s.repos.map((r) => r.name).join(" · "))))
-      .children(s.repos.map((r) => v_flex().flex_none().gap(4).pl(4)
-        .child(h_flex().h(22).gap(6).items_center()
-          .child(svg(ICON("git-branch")).size(11).text_color(t.dim))
-          .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(r.name)))
-        .children(ORDER.map((n) => r.groups.find((g) => g.title === n)).filter(Boolean)
-          .map((g) => this.group(t, g, `${s.story ?? ""}/${r.path}/`))))));
+    const n = (g) => g.count ?? g.tickets.length;
+    return [...this.data.stories].sort((a, b) => !a.story - !b.story).map((s) => {
+      const k = `story:${s.story ?? ""}`;
+      const all = s.repos.flatMap((r) => r.groups);
+      const total = all.reduce((a, g) => a + n(g), 0), done = all.filter((g) => g.title === "Done").reduce((a, g) => a + n(g), 0);
+      const folded = (done === total) !== this.toggled.has(k);
+      return v_flex().flex_none().gap(6)
+        .child(h_flex().id(`s-${k}`).px(4).h(26).gap(8).items_center().cursor_pointer().border_b(1).border_color(t.border)
+          .on_click((_e, cx) => { this.toggled.has(k) ? this.toggled.delete(k) : this.toggled.add(k); cx.notify(); })
+          .child(div().flex_none().text_size(12.5).font_bold().text_color(s.story ? BRAND : t.muted).child(s.story ?? "No story"))
+          .child(div().flex_none().text_size(11.5).text_color(t.dim)
+            .child(done === total ? `✓ done · ${s.repos.map((r) => r.name).join(" · ")}` : `${done}/${total} done`))
+          .child(div().flex_1())
+          .child(svg(ICON(folded ? "chevron-right" : "chevron-down")).size(11).flex_none().text_color(t.dim)))
+        .when(!folded, (el) => el.children(s.repos.map((r) => this.repo(t, r, `${s.story ?? ""}/${r.path}/`))));
+    });
+  }
+
+  repo(t, r, scope) {
+    const gs = ORDER.map((n) => r.groups.find((g) => g.title === n)).filter(Boolean);
+    const hot = gs.filter((g) => g.title === "Needs you" || g.title === "Working");
+    const rest = gs.filter((g) => !hot.includes(g));
+    const shut = rest.filter((g) => !this.toggled.has(scope + g.title)); // opened ones leave the line and show below
+    return v_flex().flex_none().gap(5).pl(4)
+      .child(h_flex().h(22).gap(6).items_center()
+        .child(svg(ICON("folder")).size(12).text_color(t.dim))
+        .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(r.name)))
+      .children(hot.flatMap((g) => g.tickets.map((x) => this.row(t, g, x, scope))))
+      .when(shut.length > 0, (el) => el.child(h_flex().pl(18).h(20).gap(10).items_center()
+        .children(shut.map((g) => h_flex().id(`c-${scope}${g.title}`).gap(4).items_center().cursor_pointer()
+          .text_size(11.5).text_color(t.dim).hover((h) => h.text_color(t.foreground))
+          .on_click((_e, cx) => { const k = scope + g.title; this.toggled.has(k) ? this.toggled.delete(k) : this.toggled.add(k); cx.notify(); })
+          .child(div().size(5).rounded_full().bg(KEY[g.title] === "done" ? t.done : t.dim))
+          .child(`${g.title} ${g.count ?? g.tickets.length}`)))))
+      .children(rest.filter((g) => this.toggled.has(scope + g.title)).map((g) => this.group(t, g, scope)));
   }
 
   render(cx) {

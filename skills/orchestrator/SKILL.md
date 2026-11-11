@@ -11,14 +11,16 @@ State lives in `rig` (`rig help`). Repos you work with are registered in the hub
 
 ## 1. Plan
 
+**Repos first.** If the user hasn't said where the repos are, ask for their paths (one list). Check each: the folder exists and `git -C <path> rev-parse` works. Say which paths are wrong and ask again for those only. `rig hub` lists repos rig already knows, which can save the user typing.
+
 Turn the request into one brief per repo, plus an order:
 - **What each repo changes**, and the contract between them (an API, an event, a config key). Write the contract once and put the same text in every brief that touches it.
 - **Merge order**: which repo must land first (usually the provider before its consumers, config before the code that reads it).
 - **A story id** (`S-<n>` or the user's ticket) so every repo's tickets group together on the board.
 
-- **Setup for each manager**: worker and reviewer harness (and model/effort if the user cares), `mode`, `worktree`, `autonomy`, `merge` (see step 0 of `rig skill manager`). Skip a repo whose `rig get setup` already says `done` unless the user wants to change it.
+- **Setup for each manager**: worker and reviewer harness (and model/effort if the user cares), `mode`, `worktree`, `autonomy`, `merge` (see step 0 of `rig skill manager`). A repo where `(cd <repo> && rig get setup)` says `done` keeps its saved setup: show it, don't ask.
 
-Ask the user only what the code can't tell you. Confirm the plan, setup included, in one round before starting managers.
+Ask the user only what the code can't tell you, and confirm the plan with setup in **one** round. Setup is one question: show one proposed setup for every repo that has none (worker, reviewer, mode, worktree, autonomy, merge; the harnesses `rig install` found, reviewer from another model family) and offer **Use for all (recommended)** or **Change**. On Change, take one free-form line such as `worker codex gpt-5, web: reviewer claude opus` and apply it: a bare setting goes to every repo, `<repo>: …` to that repo only. Put the result in each brief's `Setup:` line. Never ask setting by setting.
 
 Write each brief to a file:
 
@@ -36,13 +38,15 @@ Setup: worker.harness=claude reviewer.harness=codex mode=pane worktree=on autono
 
 ## 2. Start managers
 
+One manager per repo on this machine. If a repo already has a live manager (another story, or another orchestrator), `rig launch` sends it your brief instead of opening a second one; its tickets carry their story, so the two stories stay apart.
+
 `rig launch <repo path> --brief <file> [--harness h] [--model m] [--effort e] [--mode tab|pane]`
 
-It opens the manager in its own tab (default) in that repo's folder, starts it on the manager skill with your brief, and does not move the user's focus. Start repos that have to land first first; later repos can start planning in parallel when the brief says what to wait for.
+It opens the manager in its own tab (default) in that repo's folder, starts it on the manager skill with your brief, links the repo to the brief's `Story:`, and does not move the user's focus. The repo needs no rig history: any git repo works. A harness opening a folder for the first time may stop on a trust dialog; check the new manager's screen once and answer it (or tell the user). Start repos that have to land first first; later repos can start planning in parallel when the brief says what to wait for.
 
 ## 3. Listen
 
-Keep `rig inbox --hub --wait` running as a background command (Claude Code: Bash with `run_in_background`). It returns when a message arrives:
+Keep `rig inbox --hub --story S-12 --wait` running as a background command (Claude Code: Bash with `run_in_background`). It returns when a message arrives:
 - `<repo>:T-n [T-n]: T-n is needs-you|blocked|review: <title>` when a ticket in any registered repo needs a decision or is ready.
 - `<repo>:manager: …` when a manager asks or reports with `rig say orchestrator`.
 
@@ -57,7 +61,7 @@ Handle it, then start the listener again. Keep one listener; a newer one replace
 
 ## 5. Watch
 
-`rig board --hub` shows every registered repo on one board: by story, then repo, then what each ticket needs (`--all` includes done tickets, `--once` prints once). Use it to report progress; open a repo's own board for its live run detail.
+`rig board --hub --story S-12` (`--open` beside you in the app) shows the story's repos on one board: by repo, then what each ticket needs (`--all` includes done tickets, `--once` prints once). Without `--story` it shows every registered repo. Always pass your story to the inbox and the board so other work on this machine stays out; `rig hub` lists the registry and `rig hub rm <repo>` drops a repo. Use it to report progress; open a repo's own board for its live run detail.
 
 ## Rules
 - One manager per repo, one repo per manager. Never edit a repo yourself.

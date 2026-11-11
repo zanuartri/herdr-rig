@@ -138,13 +138,30 @@ export function openHub() {
     CREATE TABLE IF NOT EXISTS repos(path TEXT PRIMARY KEY, name TEXT, manager TEXT, added TEXT);
     CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, repo TEXT, ticket TEXT, frm TEXT, too TEXT, body TEXT,
       seen INTEGER DEFAULT 0, at TEXT);
-    CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);`);
+    CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS story_repos(story TEXT, path TEXT, PRIMARY KEY(story, path));`);
+  try { db.exec("ALTER TABLE messages ADD COLUMN story TEXT"); } catch {} // which orchestrator a message is for
   return db;
 }
+// the repos working on a story: linked by rig launch (the brief's Story: line) or rig new/edit, or holding a ticket in it
+function storyRepos(story: string) {
+  const hub = openHub();
+  const out = new Set((hub.query("SELECT path FROM story_repos WHERE story=?").all(story) as any[]).map(r => r.path));
+  for (const r of hub.query("SELECT path FROM repos").all() as any[]) {
+    if (out.has(r.path) || !existsSync(join(r.path, ".rig", "rig.db"))) continue;
+    const db = new Database(join(r.path, ".rig", "rig.db"), { readonly: true });
+    try { if (db.query("SELECT 1 FROM tickets WHERE story=?").get(story)) out.add(r.path); } catch {} finally { db.close(); }
+  }
+  return out;
+}
+const linkStory = (story: string | null | undefined, root: string) => { if (story) openHub().run("INSERT OR IGNORE INTO story_repos VALUES(?,?)", [story, root]); };
 // unread messages for `who`. wait: the listener; while it runs, nobody types into who's pane. A newer listener takes over.
-async function readInbox(db: Database, who: string, wait: boolean) {
-  const q = () => db.query("SELECT * FROM messages WHERE too=? AND seen=0 ORDER BY id").all(who) as any[];
-  const key = `listener.${who}`;
+// story: an orchestrator on one story (with its own listener key) takes that story's messages, and the untagged
+// ones from the story's repos (a shared repo's untagged message reaches every orchestrator using it, first come)
+async function readInbox(db: Database, who: string, wait: boolean, story?: string, key = `listener.${who}`) {
+  const repos = story ? storyRepos(story) : null;
+  const q = () => (db.query("SELECT * FROM messages WHERE too=? AND seen=0 ORDER BY id").all(who) as any[])
+    .filter(m => !story || m.story === story || (!m.story && repos!.has(m.repo)));
   let msgs = q();
   if (wait) db.run("INSERT OR REPLACE INTO settings VALUES(?,?)", [key, String(process.pid)]);
   while (wait && !msgs.length) {
@@ -153,7 +170,7 @@ async function readInbox(db: Database, who: string, wait: boolean) {
     if ((db.query("SELECT v FROM settings WHERE k=?").get(key) as any)?.v !== String(process.pid)) return console.log("(replaced by a newer listener)");
     msgs = q();
   }
-  for (const m of msgs) console.log(`${m.at} ${m.frm}${m.ticket ? ` [${m.ticket}]` : ""}: ${m.body}`);
+  for (const m of msgs) console.log(`${m.at} ${m.frm}${m.ticket ? ` [${m.ticket}]` : ""}${m.story && !story ? ` (${m.story})` : ""}: ${m.body}`);
   if (msgs.length) db.run(`UPDATE messages SET seen=1 WHERE id IN (${msgs.map(m => m.id).join(",")})`);
   else console.log("(empty)");
 }
@@ -179,25 +196,33 @@ function waitingIn(db: Database, t: any): string[] {
 }
 const groupIn = (db: Database, t: any) => (t.status === "open" || t.status === "draft") && waitingIn(db, t).length ? "Queued"
   : GROUPS.find(g => g[1].includes(t.status))?.[0] ?? "To do";
+// the hub's repos, or with a story only the repos working on it
+const hubRepos = (hub: Database, story?: string) => {
+  const all = hub.query("SELECT * FROM repos ORDER BY name").all() as any[];
+  if (!story) return all;
+  const mine = storyRepos(story);
+  return all.filter(r => mine.has(r.path));
+};
 // every registered repo on one board: by story, then repo, then what each ticket needs. --all keeps done tickets.
+// story: only that story's tickets, in the repos working on it
 // ponytail: reads each repo's DB directly, no live herdr status per run; open that repo's own board for that
-function hubBoard(all: boolean) {
+function hubBoard(all: boolean, story?: string) {
   const W = Math.max(30, (process.stdout.columns || 100) - 2);
   const fit = (s: string, n: number) => s.length > n ? s.slice(0, Math.max(0, n - 1)) + "…" : s;
   const rows: any[] = [];
-  const hub = openHub(), repos = hub.query("SELECT * FROM repos ORDER BY name").all() as any[];
+  const hub = openHub(), repos = hubRepos(hub, story);
   hub.close(); // the live board calls this every 2s
   for (const r of repos) {
     if (!existsSync(join(r.path, ".rig", "rig.db"))) continue;
     const db = new Database(join(r.path, ".rig", "rig.db"), { readonly: true });
-    for (const t of db.query("SELECT * FROM tickets ORDER BY created").all() as any[]) if (all || t.status !== "done") {
+    for (const t of db.query("SELECT * FROM tickets ORDER BY created").all() as any[]) if ((all || t.status !== "done") && (!story || t.story === story)) {
       const run = db.query("SELECT role, harness FROM runs WHERE ticket=? AND status='running' ORDER BY id DESC").get(t.id) as any;
       rows.push({ ...t, repo: r.path, name: r.name, group: GROUPS.findIndex(g => g[0] === groupIn(db, t)), run });
     }
     db.close();
   }
   let out = " " + c(1, c(214, "▲ rig")) + "  hub  " + c(90, new Date().toTimeString().slice(0, 5)) + "\n";
-  if (!rows.length) return out + c(90, "   no open tickets in any registered repo\n");
+  if (!rows.length) return out + c(90, story ? `   no open tickets in story ${story}\n` : "   no open tickets in any registered repo\n");
   const stories = [...new Set(rows.map(t => t.story ?? ""))].sort((x, y) => !x ? 1 : !y ? -1 : x.localeCompare(y, undefined, { numeric: true }));
   for (const st of stories) {
     const head = `${st ? `STORY ${st}` : "NO STORY"} `;
@@ -217,15 +242,15 @@ function hubBoard(all: boolean) {
 
 // the hub board as data, for the herdr-app mod: each repo's own `board --json` (same cards, live status), regrouped by story
 // ponytail: one rig process per repo per refresh (run in parallel); fine for a handful of repos
-async function hubJson(hc: boolean) {
-  const hub = openHub(), repos = hub.query("SELECT * FROM repos ORDER BY name").all() as any[];
+async function hubJson(hc: boolean, story?: string) {
+  const hub = openHub(), repos = hubRepos(hub, story);
   hub.close();
   const per = (await Promise.all(repos.filter(r => existsSync(join(r.path, ".rig", "rig.db"))).map(async r => {
     const p = Bun.spawn([process.execPath, import.meta.path, "board", "--json", ...(hc ? ["--hc"] : [])],
       { cwd: r.path, env: { ...process.env, RIG_ROOT: r.path, RIG_RUN: "" }, stdout: "pipe", stderr: "ignore", windowsHide: true });
     return { name: r.name, path: r.path, data: jsonOf(await new Response(p.stdout).text()) };
   }))).filter(r => r.data);
-  const stories = [...new Set(per.flatMap(r => r.data.groups.flatMap((g: any) => g.tickets.map((t: any) => t.story ?? ""))))]
+  const stories = story ? [story] : [...new Set(per.flatMap(r => r.data.groups.flatMap((g: any) => g.tickets.map((t: any) => t.story ?? ""))))]
     .sort((x, y) => !x ? 1 : !y ? -1 : x.localeCompare(y, undefined, { numeric: true }));
   return { hub: true, stories: stories.map(st => ({ story: st || null, repos: per.map(r => ({ name: r.name, path: r.path,
     groups: r.data.groups.map((g: any) => ({ title: g.title, tickets: g.tickets.filter((t: any) => (t.story ?? "") === st) })).filter((g: any) => g.tickets.length) }))
@@ -388,21 +413,22 @@ async function main(args: string[]) {
   }
 
   // the orchestrator's commands: they work from any folder, not only inside a repo
-  if (cmd === "board" && o.hub && o.json) return console.log(JSON.stringify(await hubJson(HC)));
+  const story = o.story as string | undefined;
+  if (cmd === "board" && o.hub && o.json) return console.log(JSON.stringify(await hubJson(HC, story)));
   if (cmd === "board" && o.hub && (o.open || o.tab)) { // beside this pane (or a tab): the app mod when installed, else the terminal board
     const cwd = process.cwd(), tab = !!o.tab;
     if (HC && !o.tui && existsSync(join(APP_HOME(), "mods", "rig-board", "main.js")))
-      return console.log(mux.open(tab ? "tab" : "right", cwd, "rig hub", { mod: "rig-board", props: { rig: import.meta.path.replace(/\\/g, "/"), root: cwd.replace(/\\/g, "/"), bun: process.execPath, hub: true } }));
-    if (HC) return console.log(mux.open(tab ? "tab" : "right", cwd, "rig hub", [process.execPath, import.meta.path, "board", "--hub"]));
+      return console.log(mux.open(tab ? "tab" : "right", cwd, "rig hub", { mod: "rig-board", props: { rig: import.meta.path.replace(/\\/g, "/"), root: cwd.replace(/\\/g, "/"), bun: process.execPath, hub: true, story } }));
+    if (HC) return console.log(mux.open(tab ? "tab" : "right", cwd, "rig hub", [process.execPath, import.meta.path, "board", "--hub", ...(story ? ["--story", story] : [])]));
     const made = tab ? sh(["herdr", "tab", "create", "--cwd", cwd, "--label", "rig hub", "--no-focus"])
       : sh(["herdr", "pane", "split", "--current", "--direction", "right", "--ratio", "0.5", "--cwd", cwd, "--no-focus"]);
     if (!made.ok) die(`herdr: ${made.err || made.out}`);
     const res = JSON.parse(made.out).result, pane = (tab ? res.root_pane : res.pane).pane_id;
-    sh(["herdr", "pane", "run", pane, "rig board --hub"]);
+    sh(["herdr", "pane", "run", pane, `rig board --hub${story ? ` --story ${story}` : ""}`]);
     return console.log(pane);
   }
   if (cmd === "board" && o.hub) for (let first = true; ; first = false) {
-    const text = hubBoard(!!o.all);
+    const text = hubBoard(!!o.all, story);
     process.stdout.write(o.once ? text : (first ? "\x1b[2J" : "") + "\x1b[H" + text.replace(/\n/g, "\x1b[K\n") + "\x1b[J");
     if (o.once) return;
     await Bun.sleep(2000);
@@ -421,6 +447,15 @@ async function main(args: string[]) {
     const root = dirname(g.out), name = repoName(root);
     const brief = resolve((o.brief as string) ?? die("--brief <file> is required"));
     if (!existsSync(brief)) die(`no brief at ${brief}`);
+    const st = story ?? readFileSync(brief, "utf8").match(/^Story:\s*(\S+)/m)?.[1];
+    // one manager per repo: a live one takes this brief too (its tickets carry their story), so merges stay in one hand
+    const had = (openHub().query("SELECT manager FROM repos WHERE path=?").get(root) as any)?.manager;
+    if (had && had !== "local" && mux.alive(had)) {
+      linkStory(st, root);
+      await main(["tell", `${root}:manager`, `New brief from an orchestrator${st ? ` for story ${st}` : ""}: ${brief}. `
+        + `Work it alongside your current tickets${st ? `, give its tickets --story ${st}, and report on it with rig say orchestrator --story ${st} "…"` : ""}.`]);
+      return console.log(`manager for ${name} already runs in ${had}; sent it the brief`);
+    }
     const hname = (o.harness as string) ?? "claude";
     const h = HARNESSES[hname] ?? die(`unknown harness ${hname}`); // ponytail: built-ins only; per-repo harness.<name> overrides are not read here
     const sid = crypto.randomUUID(), orch = SELF || "local", pane_ = o.mode === "pane";
@@ -452,10 +487,26 @@ async function main(args: string[]) {
       }
     }
     register(root);
+    linkStory(st, root);
     openHub().run("UPDATE repos SET manager=? WHERE path=?", [pane, root]);
     return console.log(`manager for ${name} in ${HC ? "terminal" : "pane"} ${pane}`);
   }
-  if (cmd === "inbox" && o.hub) return readInbox(openHub(), "orchestrator", !!o.wait);
+  if (cmd === "inbox" && o.hub) return readInbox(openHub(), "orchestrator", !!o.wait, story, story ? `listener.orchestrator:${story}` : undefined);
+  if (cmd === "hub") { // the registry: list it, or drop a repo the orchestrator should no longer see
+    const hub = openHub();
+    if (pos[0] === "rm") {
+      const rows = hub.query("SELECT * FROM repos WHERE name=? OR path=?").all(pos[1] ?? die("usage: rig hub rm <repo name or path>"), pos[1]) as any[];
+      if (rows.length !== 1) die(rows.length ? `${pos[1]} names ${rows.length} repos; use its path` : `no repo ${pos[1]} in the hub`);
+      hub.run("DELETE FROM repos WHERE path=?", [rows[0].path]);
+      hub.run("DELETE FROM story_repos WHERE path=?", [rows[0].path]);
+      return console.log(`removed ${rows[0].path}`);
+    }
+    for (const r of hub.query("SELECT * FROM repos ORDER BY name").all() as any[]) {
+      const st = (hub.query("SELECT story FROM story_repos WHERE path=? ORDER BY story").all(r.path) as any[]).map(x => x.story);
+      console.log(`${r.name}  ${r.path}${st.length ? `  ${st.join(",")}` : ""}`);
+    }
+    return;
+  }
   if (cmd === "tell" && /:manager$/.test(pos[0] ?? "")) { // <repo name or path>:manager → that repo's manager pane
     const name = pos[0].slice(0, -":manager".length);
     const rows = openHub().query("SELECT * FROM repos WHERE name=? OR path=?").all(name, name) as any[];
@@ -732,7 +783,7 @@ async function main(args: string[]) {
           [`T-${n}`, pos.join(" "), body, me, o.review ? 1 : 0, (o.after as string) ?? null, (o.base as string) ?? here(), (o.story as string) ?? null, now()]);
         return n;
       }).immediate();
-      register(root);
+      register(root); linkStory(o.story as string, root);
       return console.log(`T-${n}`);
     }
     case "edit": {
@@ -742,12 +793,13 @@ async function main(args: string[]) {
         if (!["title", "body", "status", "review", "manager", "after", "base", "story"].includes(k)) die(`can't edit ${k}`);
         const was = k === "status" ? ticket(t.id).status : null; // re-read: an earlier status= in this same edit counts
         db.run(`UPDATE tickets SET ${k}=? WHERE id=?`, [v.join("="), t.id]);
+        if (k === "story") { register(root); linkStory(v.join("="), root); }
         // a registered repo tells the orchestrator when a ticket needs a decision or is ready
         if (k === "status" && v.join("=") !== was && ["needs-you", "blocked", "review"].includes(v.join("="))) {
           const hub = openHub();
           // only once an orchestrator has listened, so a machine that never orchestrates collects nothing
-          if (hub.query("SELECT 1 FROM repos WHERE path=?").get(root) && hub.query("SELECT 1 FROM settings WHERE k='listener.orchestrator'").get()) hub.run("INSERT INTO messages(repo, ticket, frm, too, body, at) VALUES(?,?,?,?,?,?)",
-            [root, t.id, `${repoName(root)}:${t.id}`, "orchestrator", `${t.id} is ${v.join("=")}: ${t.title}`, now()]);
+          if (hub.query("SELECT 1 FROM repos WHERE path=?").get(root) && hub.query("SELECT 1 FROM settings WHERE k LIKE 'listener.orchestrator%'").get()) hub.run("INSERT INTO messages(repo, ticket, frm, too, body, at, story) VALUES(?,?,?,?,?,?,?)",
+            [root, t.id, `${repoName(root)}:${t.id}`, "orchestrator", `${t.id} is ${v.join("=")}: ${t.title}`, now(), ticket(t.id).story ?? null]);
         }
         if (k === "status" && v.join("=") === "done") {
           closeRuns(t.id);
@@ -998,8 +1050,10 @@ async function main(args: string[]) {
       if (to === "orchestrator") { // the hub inbox; the orchestrator's `rig inbox --hub --wait` picks it up
         register(root);
         // ponytail: stored only, never typed into the orchestrator's pane; it is expected to keep its listener running
-        openHub().run("INSERT INTO messages(repo, ticket, frm, too, body, at) VALUES(?,?,?,?,?,?)",
-          [root, tid, `${repoName(root)}:${process.env.RIG_RUN ? me : "manager"}`, "orchestrator", rest.join(" "), now()]);
+        // tagged with its story (--story, else the run's ticket's) so it reaches that story's orchestrator
+        const st = (o.story as string) ?? (tid ? ticket(tid).story : null) ?? null;
+        openHub().run("INSERT INTO messages(repo, ticket, frm, too, body, at, story) VALUES(?,?,?,?,?,?,?)",
+          [root, tid, `${repoName(root)}:${process.env.RIG_RUN ? me : "manager"}`, "orchestrator", rest.join(" "), now(), st]);
         return;
       }
       const target = to === "manager" ? ticket(tid ?? die("say manager only works inside a run")).manager
@@ -1103,17 +1157,19 @@ const HELP = `rig: manager/worker/reviewer rig on herdr. State: <repo>/.rig/rig.
   rig dispatch <T> [note] [--role worker|reviewer] [--harness h] [--model m] [--effort e] [--mode pane|tab|headless] [--worktree on|off|herdr] [--no-worktree]
   rig tell <T|run#> <msg> [--now] [--role r]  steer the worker (or --role reviewer) (--now interrupts first; headless = interrupt + resume)
   rig stop <T|run#>                          interrupt
-  rig say <manager|human|orchestrator|T|T/role> <msg>  message (pushed into the pane; human = herdr toast; orchestrator = hub inbox)
+  rig say <manager|human|orchestrator|T|T/role> <msg> [--story S]  message (pushed into the pane; human = herdr toast; orchestrator = hub inbox, for story S's orchestrator)
   rig board [--open|--tab] [--mine] [--all]  live ticket board (--open splits a pane, --tab opens a tab)
   rig clean [T] [--force]                     remove worktrees of done tickets (merged only, unless --force)
   rig close T-1|<run#>                       close a ticket's panes/tabs (status=done does it too)
   rig inbox [--wait]                         unread messages for me
   rig ps [--all]                             runs
 orchestrator (any folder; repos registered in ~/.rig/hub.db by rig new / rig launch):
-  rig launch <repo path> --brief <file> [--harness h] [--model m] [--effort e] [--mode tab|pane]  start that repo's manager
-  rig inbox --hub [--wait]                   ticket events (needs-you/blocked/review) and rig say orchestrator messages
+  rig launch <repo path> --brief <file> [--harness h] [--model m] [--effort e] [--mode tab|pane]  start that repo's manager (a live one gets the brief instead)
+  rig inbox --hub [--wait] [--story S]       ticket events (needs-you/blocked/review) and rig say orchestrator messages
   rig tell <repo>:manager <msg>              message a repo's manager (repo name or path)
-  rig board --hub [--all] [--once] [--open|--tab] [--json]  every registered repo, by story then repo (--open: the app board beside you)
+  rig board --hub [--story S] [--all] [--once] [--open|--tab] [--json]  every registered repo, by story then repo (--open: the app board beside you)
+  rig hub [rm <repo>]                        the registered repos and their stories; rm drops one
+                                             --story S: only that story's repos (rig launch reads Story: from the brief) and tickets
   rig update                                 update rig (and the board mod); installed skills follow by themselves
   rig install [claude codex agents opencode pi omp commandcode herdr-app]
                                              skills as rig-manager/worker/reviewer/orchestrator + the herdr-app board mod (default: all found)

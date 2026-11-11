@@ -11,7 +11,7 @@ State lives in `rig` (`rig help`). Repos you work with are registered in the hub
 
 ## 1. Plan
 
-**Repos first.** If the user hasn't said where the repos are, ask for their paths (one list). Check each: the folder exists and `git -C <path> rev-parse` works. Say which paths are wrong and ask again for those only. `rig hub` lists repos rig already knows, which can save the user typing.
+**Repos first.** If the user hasn't said where the repos are, ask for their paths (one list). Check each: the folder exists and `git -C <path> rev-parse` works. Say which paths are wrong and ask again for those only. `rig repos` lists repos rig already knows, which can save the user typing.
 
 Turn the request into one brief per repo, plus an order:
 - **What each repo changes**, and the contract between them (an API, an event, a config key). Write the contract once and put the same text in every brief that touches it.
@@ -46,7 +46,7 @@ It opens the manager in its own tab (default) in that repo's folder, starts it o
 
 ## 3. Listen
 
-Keep `rig inbox --hub --story S-12 --wait` running as a background command (Claude Code: Bash with `run_in_background`). It returns when a message arrives:
+Keep `rig inbox --orch --story S-12 --wait` running as a background command (Claude Code: Bash with `run_in_background`). It returns when a message arrives:
 - `<repo>:T-n [T-n]: T-n is needs-you|blocked|review: <title>` when a ticket in any registered repo needs a decision or is ready.
 - `<repo>:manager: …` when a manager asks or reports with `rig say orchestrator`.
 
@@ -61,9 +61,9 @@ Handle it, then start the listener again. Keep one listener; a newer one replace
 
 ## 5. Watch
 
-`rig board --hub --story S-12` (`--open` beside you in the app) shows the story's repos on one board: by repo, then what each ticket needs (`--all` includes done tickets, `--once` prints once). Without `--story` it shows every registered repo. Always pass your story to the inbox and the board so other work on this machine stays out; `rig hub` lists the registry and `rig hub rm <repo>` drops a repo. Use it to report progress; open a repo's own board for its live run detail.
+`rig board --orch --story S-12` (`--open` beside you in the app) shows the story's repos on one board: by repo, then what each ticket needs (`--all` includes done tickets, `--once` prints once). Without `--story` it shows every registered repo. Always pass your story to the inbox and the board so other work on this machine stays out; holding several stories in this session, pass them all (`--story S-12,S-13`) and keep one listener for them; `rig repos` lists the registry and `rig repos rm <repo>` drops a repo. Use it to report progress; open a repo's own board for its live run detail.
 
 ## Rules
 - One manager per repo, one repo per manager. Never edit a repo yourself.
 - Report results honestly: a failing verify in any repo is reported as failing.
-- Don't poll managers' screens. The hub listener is the wait.
+- Don't poll managers' screens. The inbox listener is the wait.

@@ -107,7 +107,7 @@ rig edit T-3 status=done       close panes, remove the worktree once merged
 rig board [--open|--tab] [--tui] [--mine]
 rig get · rig set worker.harness codex · rig set harness.<name> '<json>'   (add or override a harness)
 rig clean [T-3] [--force] · rig install [harness…] · rig skill manager|worker|reviewer|orchestrator
-rig launch <repo> --brief f · rig inbox --hub [--wait] · rig tell <repo>:manager "…" · rig board --hub
+rig launch <repo> --brief f · rig inbox --orch [--wait] · rig tell <repo>:manager "…" · rig board --orch
 ```
 
 `rig help` has the full list.
@@ -120,14 +120,14 @@ When one change spans several repos, one **orchestrator** session drives one man
 rig skill orchestrator                                # in the orchestrator session (installed as rig-orchestrator)
 rig launch ~/src/api --brief api.md                   # opens api's manager in a tab, on the manager skill + this brief
 rig launch ~/src/web --brief web.md --mode pane
-rig inbox --hub --wait                                # returns when a ticket in any repo is needs-you, blocked or review,
+rig inbox --orch --wait                                # returns when a ticket in any repo is needs-you, blocked or review,
                                                       # or a manager runs `rig say orchestrator "…"`
 rig tell api:manager "ship the endpoint first"        # typed into that manager's pane, focus-aware like any rig message
-rig board --hub --story S-12                          # that story's repos and tickets (no --story: every registered repo)
-rig hub [rm <repo>]                                   # the registry; rm drops a repo
+rig board --orch --story S-12                          # that story's repos and tickets (no --story: every registered repo)
+rig repos [rm <repo>]                                   # the registry; rm drops a repo
 ```
 
-Tickets carry a story (`rig new "…" --story S-12`) so a cross-repo change reads as one group on the hub board. `rig new` registers its repo in the hub; nothing changes for a repo that is never orchestrated. `rig launch` works on any git repo, rig history or not, and links it to the brief's `Story:` line, so `--story` on the inbox and the board shows only the repos and tickets of that change.
+Tickets carry a story (`rig new "…" --story S-12`) so a cross-repo change reads as one group on the orchestrator board. `rig new` registers its repo (`rig repos`); nothing changes for a repo that is never orchestrated. `rig launch` works on any git repo, rig history or not, and links it to the brief's `Story:` line, so `--story` on the inbox and the board shows only the repos and tickets of that change.
 
 ## Tested
 

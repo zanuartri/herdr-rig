@@ -1,7 +1,7 @@
 // rig board for the Herdr app: tickets grouped by what they need from you. Data comes from `rig board --json`;
 // live agent status and icons come from Herdr itself (terminals()), so those update without polling.
 // props: { rig: "<path to rig.ts>", root: "<repo>", bun: "<bun binary>" } (an app started from the dock may not have bun on PATH). Opened by `rig board --open` as a pane beside the manager.
-// props: { rig, root, hub: true }: every registered repo, by story then repo (a done story folds to a line) (`rig board --hub --json`). Opened by `rig board --hub --open`.
+// props: { rig, root, orch: true }: every registered repo, by story then repo (a done story folds to a line) (`rig board --orch --json`). Opened by `rig board --orch --open`.
 // Look: neutral and dense. The only color is the small status mark.
 
 import { View, div, svg, image } from "gpui-kit";
@@ -35,7 +35,7 @@ export default class RigBoard extends View {
     this.data = null;
     this.width = 400;
     this.error = "";
-    this.toggled = new Set(); // groups opened or folded by hand; To do and Done start folded (on the hub, all but Needs you and Working)
+    this.toggled = new Set(); // groups opened or folded by hand; To do and Done start folded (on the orchestrator board, all but Needs you and Working)
     this.expanded = new Set();
     this.seen = new Set(JSON.parse(localStorage.getItem("seen") ?? "[]")); // needs-you tickets already notified
     cx.timer.every(2000, (cx) => this.refresh(cx));
@@ -45,11 +45,11 @@ export default class RigBoard extends View {
 
   refresh(cx) {
     const p = props() ?? {};
-    if (this.busy) return; // a slow refresh (many repos on the hub) must not stack up or land out of order
+    if (this.busy) return; // a slow refresh (many repos on the orchestrator board) must not stack up or land out of order
     this.busy = true;
     cx.spawn(async (cx) => {
       try {
-        const args = [p.rig, "board", "--json", "--hc", ...(p.hub ? ["--hub"] : []), ...(p.story ? ["--story", p.story] : [])];
+        const args = [p.rig, "board", "--json", "--hc", ...(p.orch ? ["--orch"] : []), ...(p.story ? ["--story", p.story] : [])];
         // p.bun is the bun rig ran on; after a bun upgrade that path can be gone, so fall back to PATH
         const r = await exec(p.bun ?? "bun", args, { cwd: p.root }).catch(() => exec("bun", args, { cwd: p.root }));
         if (r.code) throw new Error(r.stderr.trim() || `rig exited ${r.code}`);
@@ -80,9 +80,9 @@ export default class RigBoard extends View {
     localStorage.setItem("seen", JSON.stringify([...this.seen].slice(-200)));
   }
 
-  // the groups across the whole board: one repo's, or every repo's on the hub (tickets tagged with their repo)
+  // the groups across the whole board: one repo's, or every repo's on the orchestrator board (tickets tagged with their repo)
   flat() {
-    if (!this.data?.hub) return ORDER.map((n) => this.data?.groups.find((g) => g.title === n)).filter(Boolean);
+    if (!this.data?.orch) return ORDER.map((n) => this.data?.groups.find((g) => g.title === n)).filter(Boolean);
     return ORDER.map((title) => ({ title, tickets: this.data.stories.flatMap((s) => s.repos.flatMap((r) =>
       (r.groups.find((g) => g.title === title)?.tickets ?? []).map((x) => ({ ...x, repo: r.name, repoPath: r.path }))) ) }));
   }
@@ -150,16 +150,19 @@ export default class RigBoard extends View {
   // how the manager is set to work. Changing these is the manager's job (rig set), so this only shows them.
   settings(t, st) {
     const AUTONOMY = { ask: "asks after each ticket", review: "merges on your yes", merge: "auto-merges" };
-    const item = (icon, label, value, hot) => h_flex().flex_none().gap(5).items_center()
-      .child(svg(ICON(icon)).size(11).text_color(hot ? BRAND : t.dim))
-      .child(div().text_size(11).text_color(t.dim).child(label))
-      .child(div().text_size(11).font_semibold().text_color(hot ? BRAND : t.muted).child(value));
+    // one line at any width: labels go when narrow (the icons stay), and worker/reviewer shrink to an ellipsis
+    const wide = this.width > 760;
+    const item = (icon, label, value, hot, shrink = false) => h_flex().gap(5).items_center().when(!shrink, (el) => el.flex_none()).when(shrink, (el) => el.min_w(0))
+      .child(svg(ICON(icon)).size(11).flex_none().text_color(hot ? BRAND : t.dim))
+      .when(wide, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(label)))
+      .child(div().min_w(0).truncate().text_size(11).font_semibold().text_color(hot ? BRAND : t.muted).child(value));
+    const who = (v) => v.replace(/^(\w+) \1-/, "$1 "); // "claude claude-sonnet-5-5 low" → "claude sonnet-5-5 low"
     return h_flex().px(12).h(28).flex_none().gap(14).items_center().overflow_hidden().border_b(1).border_color(t.border)
-      .child(item("circle-check", "merge", `${AUTONOMY[st.autonomy] ?? st.autonomy} · ${st.merge === "pr" ? "via PR" : "local"}`, st.autonomy === "merge"))
+      .child(item("circle-check", "merge", `${wide ? AUTONOMY[st.autonomy] ?? st.autonomy : st.autonomy} · ${st.merge === "pr" ? "via PR" : "local"}`, st.autonomy === "merge"))
       .child(item("git-branch", "worktree", st.worktree, false))
       .child(item("terminal", "runs in", st.mode, false))
-      .when(!!st.worker, (el) => el.child(item("square-pen", "worker", st.worker, false)))
-      .when(!!st.reviewer, (el) => el.child(item("search", "reviewer", st.reviewer, false)));
+      .when(!!st.worker, (el) => el.child(item("square-pen", "worker", who(st.worker), false, true)))
+      .when(!!st.reviewer, (el) => el.child(item("search", "reviewer", who(st.reviewer), false, true)));
   }
 
   row(t, g, x, scope = "") {
@@ -212,10 +215,10 @@ export default class RigBoard extends View {
       .child(this.side(t, key, x, glyph, c, goto, stuck, scope));
   }
 
-  // scope keeps ids and fold state apart when several repos each have a Working group (the hub board)
+  // scope keeps ids and fold state apart when several repos each have a Working group (the orchestrator board)
   group(t, g, scope = "") {
     const k = scope + g.title;
-    const shut = this.data?.hub ? !["Needs you", "Working"].includes(g.title) : g.title === "To do" || g.title === "Done";
+    const shut = this.data?.orch ? !["Needs you", "Working"].includes(g.title) : g.title === "To do" || g.title === "Done";
     const folded = shut !== this.toggled.has(k);
     const open = this.expanded.has(k);
     const rows = open ? g.tickets : g.tickets.slice(0, LIMIT[g.title]);
@@ -243,7 +246,7 @@ export default class RigBoard extends View {
             .child(`${g.count - g.tickets.length} older · rig ls --all`))));
   }
 
-  // hub board: a section per story (a finished one folds to a line), a repo inside it. A repo shows its
+  // orchestrator board: a section per story (a finished one folds to a line), a repo inside it. A repo shows its
   // Needs you and Working cards; its other groups sit on one line of counts, each opening that group.
   stories(t) {
     const n = (g) => g.count ?? g.tickets.length;
@@ -285,7 +288,7 @@ export default class RigBoard extends View {
 
   render(cx) {
     const t = theme();
-    const hub = !!this.data?.hub;
+    const orch = !!this.data?.orch;
     const groups = this.flat().filter((g) => g?.tickets.length);
     const live = new Map(terminals().map((y) => [y.address, y]));
     const working = groups.find((g) => g.title === "Working")?.tickets ?? [];
@@ -302,7 +305,7 @@ export default class RigBoard extends View {
             .child(svg(LOGO).size(14).text_color(BRAND)))
           .child(div().text_size(14).font_bold().text_color(BRAND).child("rig"))
           .child(div().text_size(13).text_color(t.dim).child("/"))
-          .child(div().text_size(13.5).font_bold().text_color(t.foreground).child(hub ? "hub" : this.data?.repo ?? "")))
+          .child(div().text_size(13.5).font_bold().text_color(t.foreground).child(orch ? `orchestrator${props()?.story ? ` · ${props().story}` : ""}` : this.data?.repo ?? "")))
         .child(h_flex().flex_1().min_w(0).gap(12).items_center().overflow_hidden().pl(4)
           .children(stats.map(([n, label]) => h_flex().flex_none().gap(4).items_baseline()
             .child(div().text_size(12.5).font_bold().text_color(t.foreground).child(String(n)))
@@ -318,11 +321,11 @@ export default class RigBoard extends View {
       .when(!!this.error, (el) => el.child(div().mx(8).mt(8).px(8).py(6).rounded(5).border(1).border_color(t.border)
         .text_size(11).text_color(t.muted).child(this.error)))
       .child(v_flex().id("list").flex_1().overflow_y_scrollbar().px(8).py(6).gap(8)
-        .when(hub, (el) => el.children(this.stories(t)))
-        .when(!hub, (el) => el.children(groups.map((g) => this.group(t, g))))
+        .when(orch, (el) => el.children(this.stories(t)))
+        .when(!orch, (el) => el.children(groups.map((g) => this.group(t, g))))
         .when(!!this.data && !groups.length, (el) => el.child(v_flex().py(40).gap(8).items_center()
           .child(svg(LOGO).size(28).text_color(alpha(BRAND, "aa")))
           .child(div().text_size(13).font_semibold().text_color(t.foreground).child("The rig is quiet"))
-          .child(div().text_size(12).text_color(t.dim).child(hub ? "No open tickets in any registered repo." : "Tell the manager what needs doing.")))));
+          .child(div().text_size(12).text_color(t.dim).child(orch ? "No open tickets in any registered repo." : "Tell the manager what needs doing.")))));
   }
 }

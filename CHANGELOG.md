@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows [Kee
   - One manager per repo: `rig launch` on a repo whose manager is still live sends it the brief instead of opening another. Messages to the orchestrator carry their story (the ticket's, or `rig say orchestrator --story S`), so two orchestrators sharing a repo each get their own.
   - The orchestrator skill asks for the repo paths and checks them, and asks setup as one question (one proposal for all repos, or a one-line change per repo or role).
   - The orchestrator board in the app: a finished story folds to one line; each repo shows its Needs you and Working cards, with its other groups on one line of counts.
+  - Stories have a title: the brief's `Story: S-7 Link expiry` line (or `rig story S-7 "Link expiry"`), shown on the orchestrator board.
   - `rig-orchestrator` skill (`rig skill orchestrator`), installed by `rig install`; the manager skill says what to do when an orchestrator started it.
 
 ### Fixed

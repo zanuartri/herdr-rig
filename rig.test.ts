@@ -258,6 +258,9 @@ test("--story narrows the hub to that story's repos and tickets; hub rm drops a 
   expect(two).toContain("for two"); expect(two).not.toContain("needs-you");
   const both = rigIn(out, ["board", "--orch", "--once", "--story", "S-ONLY,S-TWO"]); // one session, two stories
   expect(both).toContain("STORY S-ONLY"); expect(both).toContain("STORY S-TWO"); expect(both).not.toContain("other work");
+  rigIn(out, ["story", "S-ONLY", "Link expiry"]);
+  expect(rigIn(out, ["board", "--orch", "--once", "--story", "S-ONLY"])).toContain("STORY S-ONLY · Link expiry");
+  expect(JSON.parse(rigIn(out, ["board", "--orch", "--json", "--story", "S-ONLY"])).stories[0].title).toBe("Link expiry");
   expect(rigIn(out, ["repos"])).toContain(nb);
   rigIn(out, ["repos", "rm", nb]);
   expect(rigIn(out, ["repos"])).not.toContain(nb);

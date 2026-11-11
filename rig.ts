@@ -139,10 +139,14 @@ export function openHub() {
     CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY, repo TEXT, ticket TEXT, frm TEXT, too TEXT, body TEXT,
       seen INTEGER DEFAULT 0, at TEXT);
     CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
-    CREATE TABLE IF NOT EXISTS story_repos(story TEXT, path TEXT, PRIMARY KEY(story, path));`);
+    CREATE TABLE IF NOT EXISTS story_repos(story TEXT, path TEXT, PRIMARY KEY(story, path));
+    CREATE TABLE IF NOT EXISTS stories(id TEXT PRIMARY KEY, title TEXT);`);
   try { db.exec("ALTER TABLE messages ADD COLUMN story TEXT"); } catch {} // which orchestrator a message is for
   return db;
 }
+// a story's title: the brief's "Story: S-7 Link expiry" line (rig launch), or rig story S-7 "Link expiry"
+const storyTitle = (id: string) => (openHub().query("SELECT title FROM stories WHERE id=?").get(id) as any)?.title ?? "";
+const nameStory = (id: string, title: string) => { if (title) openHub().run("INSERT OR REPLACE INTO stories VALUES(?,?)", [id, title]); };
 // the repos working on a story: linked by rig launch (the brief's Story: line) or rig new/edit, or holding a ticket in it
 // story: one id, or several as "S-1,S-2" (an orchestrator session can hold more than one story)
 const inList = (list: string, s?: string | null) => !!s && list.split(",").includes(s);
@@ -227,7 +231,7 @@ function hubBoard(all: boolean, story?: string) {
   if (!rows.length) return out + c(90, story ? `   no open tickets in story ${story}\n` : "   no open tickets in any registered repo\n");
   const stories = [...new Set(rows.map(t => t.story ?? ""))].sort((x, y) => !x ? 1 : !y ? -1 : x.localeCompare(y, undefined, { numeric: true }));
   for (const st of stories) {
-    const head = `${st ? `STORY ${st}` : "NO STORY"} `;
+    const head = `${st ? `STORY ${st}${storyTitle(st) ? ` · ${storyTitle(st)}` : ""}` : "NO STORY"} `;
     out += "\n " + c(1, head) + c(90, "─".repeat(Math.max(0, W - head.length))) + "\n";
     const mine = rows.filter(t => (t.story ?? "") === st);
     for (const repo of [...new Set(mine.map(t => t.repo))]) {
@@ -254,7 +258,7 @@ async function hubJson(hc: boolean, story?: string) {
   }))).filter(r => r.data);
   const stories = story ? story.split(",") : [...new Set(per.flatMap(r => r.data.groups.flatMap((g: any) => g.tickets.map((t: any) => t.story ?? ""))))]
     .sort((x, y) => !x ? 1 : !y ? -1 : x.localeCompare(y, undefined, { numeric: true }));
-  return { orch: true, stories: stories.map(st => ({ story: st || null, repos: per.map(r => ({ name: r.name, path: r.path,
+  return { orch: true, stories: stories.map(st => ({ story: st || null, title: st ? storyTitle(st) : "", repos: per.map(r => ({ name: r.name, path: r.path,
     groups: r.data.groups.map((g: any) => ({ title: g.title, tickets: g.tickets.filter((t: any) => (t.story ?? "") === st) })).filter((g: any) => g.tickets.length) }))
     .filter(r => r.groups.length) })) };
 }
@@ -449,7 +453,9 @@ async function main(args: string[]) {
     const root = dirname(g.out), name = repoName(root);
     const brief = resolve((o.brief as string) ?? die("--brief <file> is required"));
     if (!existsSync(brief)) die(`no brief at ${brief}`);
-    const st = readFileSync(brief, "utf8").match(/^Story:\s*(\S+)/m)?.[1] ?? story;
+    const line = readFileSync(brief, "utf8").match(/^Story:\s*(\S+)[ \t]*(.*)$/m);
+    const st = line?.[1] ?? story;
+    if (st) nameStory(st, line?.[2].trim() ?? "");
     // one manager per repo: a live one takes this brief too (its tickets carry their story), so merges stay in one hand
     const had = (openHub().query("SELECT manager FROM repos WHERE path=?").get(root) as any)?.manager;
     if (had && had !== "local" && mux.alive(had)) {
@@ -494,6 +500,11 @@ async function main(args: string[]) {
     return console.log(`manager for ${name} in ${HC ? "terminal" : "pane"} ${pane}`);
   }
   if (cmd === "inbox" && o.orch) return readInbox(openHub(), "orchestrator", !!o.wait, story, story ? `listener.orchestrator:${story}` : undefined);
+  if (cmd === "story") { // rig story S-7 "Link expiry": name it (shown on the orchestrator board); rig story S-7: print it
+    if (!pos[0]) die('usage: rig story <id> ["title"]');
+    if (pos[1]) nameStory(pos[0], pos.slice(1).join(" "));
+    return console.log(`${pos[0]}${storyTitle(pos[0]) ? ` · ${storyTitle(pos[0])}` : ""}`);
+  }
   if (cmd === "repos") { // the registry: list it, or drop a repo the orchestrator should no longer see
     const hub = openHub();
     if (pos[0] === "rm") {
@@ -1170,6 +1181,7 @@ orchestrator (any folder; repos registered in ~/.rig/hub.db by rig new / rig lau
   rig inbox --orch [--wait] [--story S[,S2]]       ticket events (needs-you/blocked/review) and rig say orchestrator messages
   rig tell <repo>:manager <msg>              message a repo's manager (repo name or path)
   rig board --orch [--story S[,S2]] [--all] [--once] [--open|--tab] [--json]  every registered repo, by story then repo (--open: the app board beside you)
+  rig story <S> ["title"]                    name a story (rig launch takes it from the brief's "Story: S-7 Link expiry")
   rig repos [rm <repo>]                        the registered repos and their stories; rm drops one
                                              --story S,S2: only those stories' repos and tickets; S: only that story's repos (rig launch reads Story: from the brief) and tickets
   rig update                                 update rig (and the board mod); installed skills follow by themselves

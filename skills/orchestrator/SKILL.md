@@ -16,7 +16,7 @@ State lives in `rig` (`rig help`). Repos you work with are registered in the hub
 Turn the request into one brief per repo, plus an order:
 - **What each repo changes**, and the contract between them (an API, an event, a config key). Write the contract once and put the same text in every brief that touches it.
 - **Merge order**: which repo must land first (usually the provider before its consumers, config before the code that reads it).
-- **A story id** (`S-<n>` or the user's ticket) so every repo's tickets group together on the board.
+- **A story id and a short title** (`S-<n>` or the user's ticket, e.g. `S-12 Link expiry`) so every repo's tickets group together on the board.
 
 - **Setup for each manager**: worker and reviewer harness (and model/effort if the user cares), `mode`, `worktree`, `autonomy`, `merge` (see step 0 of `rig skill manager`). A repo where `(cd <repo> && rig get setup)` says `done` keeps its saved setup: show it, don't ask.
 
@@ -25,7 +25,7 @@ Ask the user only what the code can't tell you, and confirm the plan with setup 
 Write each brief to a file:
 
 ```
-Story: S-12
+Story: S-12 Link expiry   (the id, then a short title the board shows)
 Repo: <name>
 Goal: what this repo changes and why
 Contract: the shared interface, word for word the same in every brief

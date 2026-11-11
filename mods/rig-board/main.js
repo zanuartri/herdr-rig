@@ -254,14 +254,14 @@ export default class RigBoard extends View {
       const k = `story:${s.story ?? ""}`;
       const all = s.repos.flatMap((r) => r.groups);
       const total = all.reduce((a, g) => a + n(g), 0), done = all.filter((g) => g.title === "Done").reduce((a, g) => a + n(g), 0);
-      const folded = (done === total) !== this.toggled.has(k);
+      const folded = (total > 0 && done === total) !== this.toggled.has(k);
       return v_flex().flex_none().gap(6)
         .child(h_flex().id(`s-${k}`).px(4).h(26).gap(8).items_center().cursor_pointer().border_b(1).border_color(t.border)
           .on_click((_e, cx) => { this.toggled.has(k) ? this.toggled.delete(k) : this.toggled.add(k); cx.notify(); })
           .child(div().flex_none().text_size(12.5).font_bold().text_color(s.story ? BRAND : t.muted).child(s.story ?? "No story"))
           .when(!!s.title, (el) => el.child(div().min_w(0).truncate().text_size(12.5).font_semibold().text_color(t.foreground).child(s.title)))
           .child(div().flex_none().text_size(11.5).text_color(t.dim)
-            .child(done === total ? `✓ done · ${s.repos.map((r) => r.name).join(" · ")}` : `${done}/${total} done`))
+            .child(!total ? "no tickets yet" : done === total ? `✓ done · ${s.repos.map((r) => r.name).join(" · ")}` : `${done}/${total} done`))
           .child(div().flex_1())
           .child(svg(ICON(folded ? "chevron-right" : "chevron-down")).size(11).flex_none().text_color(t.dim)))
         .when(!folded, (el) => el.children(s.repos.map((r) => this.repo(t, r, `${s.story ?? ""}/${r.path}/`))));

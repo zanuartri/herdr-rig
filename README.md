@@ -51,6 +51,8 @@ To update, run `rig update`. rig checks for a new release at most once a day and
 
 To hack on it instead, clone the repo and run `bun link` inside it. `rig` then runs your checkout, so changes apply right away, and `rig update` does a `git pull`.
 
+For Bun global installs, `rig update` installs the latest published release. If an older updater keeps reinstalling the same version, install a specific tag from the [GitHub releases](https://github.com/zanuartri/herdr-rig/releases) with `bun add -g 'github:zanuartri/herdr-rig#v0.4.2'`, then check `rig --version`.
+
 For Claude Code you can use the plugin instead: `claude plugin marketplace add zanuartri/herdr-rig`, then `claude plugin install rig@herdr-rig`.
 
 ## Quick start

@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] - 2026-11-21
+
+### Fixed
+- `rig update` installs the latest published GitHub release by tag and verifies the installed version before reporting success. Use `rig --version` to check which version is running.
+
 ## [0.4.1] - 2026-11-21
 
 ### Fixed

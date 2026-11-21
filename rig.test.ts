@@ -1,5 +1,5 @@
 import { test, expect, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { argv, HARNESSES, slot, worktreePlan, deep, openHub, launchCmd, hcSettled, claimHeld, finishHeld, digestText, open as openDb } from "./rig.ts";
@@ -27,6 +27,36 @@ const rigIn = (cwd: string, args: string[], env: Record<string, string> = {}) =>
     { cwd, env: { ...process.env, HERDR_PANE_ID: "", HC_TERMINAL_ID: "", RIG_RUN: "", RIG_ROOT: "", ...env } });
   return p.stdout.toString().trim() + p.stderr.toString().trim();
 };
+
+test("update pins the latest release tag and verifies Bun's global rig before reporting success", () => {
+  const dir = tmp("rig-update-");
+  copyFileSync(join(import.meta.dir, "rig.ts"), join(dir, "rig.ts"));
+  writeFileSync(join(dir, "package.json"), '{"version":"0.3.0"}');
+  const globalRig = join(dir, process.platform === "win32" ? "rig.exe" : "rig");
+  writeFileSync(globalRig, "");
+  const preload = join(dir, "mock.ts");
+  writeFileSync(preload, `
+    globalThis.fetch = async () => Response.json({ tag_name: "v0.4.2" });
+    Bun.spawnSync = (argv) => {
+      const args = argv.slice(1);
+      const result = (out = "") => ({ exitCode: 0, stdout: Buffer.from(out), stderr: Buffer.alloc(0) });
+      if (args.join(" ") === "pm bin -g") return result(${JSON.stringify(dir)});
+      if (args.join(" ") === "add -g github:zanuartri/herdr-rig#v0.4.2") return result();
+      if (argv.at(-2) === ${JSON.stringify(globalRig)} && argv.at(-1) === "--version")
+        return result(process.env.RIG_TEST_INSTALLED_VERSION);
+      throw new Error("Unexpected command " + JSON.stringify(argv));
+    };
+  `);
+  const update = (installed: string) => Bun.spawnSync([process.execPath, "--preload", preload, join(dir, "rig.ts"), "update"],
+    { cwd: dir, env: { ...process.env, HERDR_APP_HOME: dir, RIG_TEST_INSTALLED_VERSION: installed } });
+  const ok = update("0.4.2");
+  expect(ok.exitCode).toBe(0);
+  expect(ok.stdout.toString().trim()).toBe("rig updated from 0.3.0 to 0.4.2");
+  const stale = update("0.3.0");
+  expect(stale.exitCode).toBe(1);
+  expect(stale.stderr.toString()).toContain("could not verify installed rig version 0.4.2");
+  expect(stale.stdout.toString()).toBe("");
+});
 
 test("argv expands model and sid, drops model when unset", () => {
   expect(argv(HARNESSES.claude, "headless", "opus", "S", "go")).toEqual(

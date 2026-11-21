@@ -15,6 +15,16 @@ const sh = (cmd: string[], cwd?: string) => {
 };
 const die = (msg: string): never => { console.error(`rig: ${msg}`); process.exit(1); };
 const now = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+const rigVersion = () => JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8")).version as string;
+const RIG_REPO = "zanuartri/herdr-rig";
+
+async function latestReleaseTag(timeout: number) {
+  const r = await fetch(`https://api.github.com/repos/${RIG_REPO}/releases/latest`, { signal: AbortSignal.timeout(timeout) });
+  if (!r.ok) throw new Error(`GitHub returned HTTP ${r.status}`);
+  const tag = (await r.json()).tag_name;
+  if (typeof tag !== "string" || !/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error("invalid release tag from GitHub");
+  return tag;
+}
 
 // ---- harnesses: data, not code. "{model}" expands to the `model` args, then the `effort` args (each dropped when unset). Prompt is appended last.
 // launch: the interactive command takes the first prompt as its last argument. Typing it into a booting TUI can be lost,
@@ -454,17 +464,43 @@ async function main(args: string[]) {
     mode: { type: "string" }, worktree: { type: "string" }, "no-worktree": { type: "boolean" }, review: { type: "boolean" }, now: { type: "boolean" },
     mine: { type: "boolean" }, all: { type: "boolean" }, wait: { type: "boolean" }, open: { type: "boolean" },
     tab: { type: "boolean" }, once: { type: "boolean" }, force: { type: "boolean" }, json: { type: "boolean" }, tui: { type: "boolean" } } });
+  if (args[0] === "--version" || cmd === "version") return console.log(rigVersion());
   if (!cmd || cmd === "help") return console.log(HELP);
   if (cmd === "skill") return console.log(readFileSync(join(SKILLS, pos[0] ?? "manager", "SKILL.md"), "utf8"));
   if (cmd === "install") return install(pos);
-  if (cmd === "update") { // a git checkout (bun link) pulls; an install from GitHub reinstalls. Skills follow on their own.
+  if (cmd === "update") {
     const git = existsSync(join(import.meta.dir, ".git"));
-    const p = Bun.spawnSync(git ? ["git", "-C", import.meta.dir, "pull", "--ff-only"] : [process.execPath, "add", "-g", "github:zanuartri/herdr-rig"],
-      { stdio: ["ignore", "inherit", "inherit"] });
-    if (p.exitCode) process.exit(p.exitCode);
-    // the board mod is a copy, so refresh it where the desktop app has it
-    if (existsSync(join(APP_HOME(), "mods", "rig-board"))) Bun.spawnSync(["rig", "install", "herdr-app"], { stdio: ["ignore", "ignore", "inherit"] });
-    return console.log(`rig is up to date (${JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8")).version})`);
+    const before = rigVersion();
+    let installed = [process.execPath, import.meta.path];
+    let version: string;
+    if (git) {
+      const p = Bun.spawnSync(["git", "-C", import.meta.dir, "pull", "--ff-only"], { stdio: ["ignore", "inherit", "inherit"] });
+      if (p.exitCode !== 0) process.exit(p.exitCode ?? 1);
+      version = rigVersion();
+    } else {
+      let tag: string;
+      try { tag = await latestReleaseTag(10000); } catch (error) {
+        return die(`could not look up the latest release: ${(error as Error).message}`);
+      }
+      const expected = tag.slice(1);
+      if (Bun.semver.order(before, expected) > 0) return console.log(`rig ${before} is newer than release ${expected}`);
+      const location = sh([process.execPath, "pm", "bin", "-g"]);
+      if (!location.ok || !location.out) return die("could not locate Bun's global bin directory");
+      const globalRig = join(location.out, process.platform === "win32" ? "rig.exe" : "rig");
+      const p = Bun.spawnSync([process.execPath, "add", "-g", `github:${RIG_REPO}#${tag}`],
+        { stdio: ["ignore", "inherit", "inherit"] });
+      if (p.exitCode !== 0) process.exit(p.exitCode ?? 1);
+      installed = process.platform === "win32" ? [globalRig] : [process.execPath, globalRig];
+      if (!existsSync(globalRig)) return die(`Bun did not install rig at ${globalRig}`);
+      const check = sh([...installed, "--version"]);
+      if (!check.ok || check.out !== expected) return die(`could not verify installed rig version ${expected} at ${globalRig}`);
+      version = check.out;
+    }
+    if (existsSync(join(APP_HOME(), "mods", "rig-board"))) {
+      const p = Bun.spawnSync([...installed, "install", "herdr-app"], { stdio: ["ignore", "ignore", "inherit"] });
+      if (p.exitCode !== 0) return die(`rig ${version} installed, but the board mod could not be refreshed`);
+    }
+    return console.log(version === before ? `rig is up to date (${version})` : `rig updated from ${before} to ${version}`);
   }
 
   // the orchestrator's commands: they work from any folder, not only inside a repo
@@ -1212,13 +1248,12 @@ async function updateNotice() {
   try { c = JSON.parse(readFileSync(file, "utf8")); } catch {}
   if (!c.at || Date.now() - c.at > 86400000) {
     try {
-      const r = await fetch("https://api.github.com/repos/zanuartri/herdr-rig/releases/latest", { signal: AbortSignal.timeout(1500) });
-      if (r.ok) c.latest = String((await r.json()).tag_name ?? "").replace(/^v/, "");
+      c.latest = (await latestReleaseTag(1500)).slice(1);
     } catch {}
     c.at = Date.now();
     try { writeFileSync(file, JSON.stringify(c)); } catch {}
   }
-  const mine = JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf8")).version;
+  const mine = rigVersion();
   const num = (v: string) => v.split(".").map(Number);
   const newer = (a: number[], b: number[]) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
   if (c.latest && newer(num(c.latest), num(mine)) > 0)

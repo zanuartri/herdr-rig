@@ -133,6 +133,7 @@ export function open(path: string) {
   try { db.exec("ALTER TABLE tickets ADD COLUMN after TEXT"); } catch {} // "T-3,T-4": waits for these
   try { db.exec("ALTER TABLE tickets ADD COLUMN base TEXT"); } catch {} // branch it starts from and lands on
   try { db.exec("ALTER TABLE tickets ADD COLUMN story TEXT"); } catch {} // groups tickets across repos on the orchestrator board
+  try { db.exec("ALTER TABLE messages ADD COLUMN delivery_pid INTEGER"); } catch {}
   return db;
 }
 // ---- hub: <RIG_HOME>/.rig/hub.db, one per machine: the repos an orchestrator sees, and the messages meant for it
@@ -278,6 +279,42 @@ const word = (s: any): string | undefined => typeof s === "string" ? s : s?.stat
 // herdr CLI: a pane is gone only when herdr says so; a busy or timed-out herdr call is not a closed pane
 const paneGone = (p: string) => { const r = sh(["herdr", "pane", "get", p]); return !r.ok && /pane_not_found/.test(r.out + r.err); };
 const hcGet = (t: string) => { const r = sh(["hc", "get", t, "--json"]); try { return r.ok ? JSON.parse(r.out) : null; } catch { return null; } };
+/** hc wait answered `j`: does the agent count as settled after turn `turn0`? A block or an error (a dropped connection,
+ *  a failed request) counts unless it is the one already reported (`skip`): hc answers it at once for as long as it lasts. */
+export const hcSettled = (st: string | undefined, j: any, turn0: number, skip = "") =>
+  ((st === "blocked" || st === "error") && st !== skip) || (j.turn > turn0 && j.reason !== "timeout");
+/** Reserve held messages for one pane delivery while keeping them unread in the inbox. */
+export function claimHeld(db: Database, too: string) {
+  return db.transaction(() => {
+    const owners = db.query<{ delivery_pid: number }, [string]>(
+      "SELECT DISTINCT delivery_pid FROM messages WHERE too=? AND seen=0 AND delivery_pid IS NOT NULL"
+    ).all(too);
+    for (const { delivery_pid: pid } of owners) {
+      try { process.kill(pid, 0); } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ESRCH")
+          db.run("UPDATE messages SET delivery_pid=NULL WHERE too=? AND delivery_pid=?", [too, pid]);
+      }
+    }
+    return (db.query("UPDATE messages SET delivery_pid=? WHERE too=? AND seen=0 AND delivery_pid IS NULL RETURNING *")
+      .all(process.pid, too) as any[]).sort((a, b) => a.id - b.id);
+  }).immediate();
+}
+
+export function finishHeld(db: Database, held: { id: number }[], delivered: boolean) {
+  db.run(`UPDATE messages SET delivery_pid=NULL${delivered ? ", seen=1" : ""}
+    WHERE delivery_pid=? AND id IN (SELECT value FROM json_each(?))`,
+    [process.pid, JSON.stringify(held.map(h => h.id))]);
+}
+/** several held messages as one push: first lines, a run of the same line once with its count */
+export function digestText(held: any[]) {
+  const lines: [string, number][] = [];
+  for (const h of held) {
+    const l = `- ${h.frm}${h.ticket ? ` on ${h.ticket}` : ""}: ${h.body.split("\n")[0]}`;
+    if (lines.at(-1)?.[0] === l) lines.at(-1)![1]++; else lines.push([l, 1]);
+  }
+  return `[rig] ${held.length} messages while you were busy:\n` + lines.map(([l, n]) => n > 1 ? `${l} (×${n})` : l).join("\n")
+    + "\n(rig show <ticket> for the full text)";
+}
 export const mux = HC ? {
   push: (t: string, text: string) => sh(["hc", "send", t, text]).ok,
   status: (t: string) => { const g = hcGet(t); return g?.state !== "live" ? "gone" : word(g.status) ?? "running"; },
@@ -343,8 +380,11 @@ export const mux = HC ? {
   /** wait until the agent works then settles; returns its status, or null when the terminal is gone */
   // wait until the agent settles after turn `after`; returns [status, turn], or null when the terminal is gone.
   // The caller starts at 0: with the prompt given at launch, turn 1 may begin before anyone looks.
-  async settle(t: string, after = 0): Promise<[string, number] | null> {
+  // `reported`: the state ("blocked", "error") the caller already told someone about in turn `after`; it doesn't
+  // count again while it lasts (hc keeps answering it at once), but one that clears and comes back does
+  async settle(t: string, after = 0, reported = ""): Promise<[string, number] | null> {
     const turn0 = after;
+    let skip = reported;
     for (;;) {
       const w = sh(["hc", "wait", t, "--json", "--timeout", "600"]);
       let j: any = null; try { j = w.ok ? JSON.parse(w.out) : null; } catch {}
@@ -354,7 +394,8 @@ export const mux = HC ? {
       if (!j) { if (gone()) return null; await Bun.sleep(3000); continue; }
       if (j.exit_code != null || j.signal != null || gone()) return null;
       const st = word(j.status);
-      if (st === "blocked" || st === "error" || (j.turn > turn0 && j.reason !== "timeout")) return [st ?? "idle", j.turn ?? turn0];
+      if (st !== skip) skip = "";
+      if (hcSettled(st, j, turn0, skip)) return [st ?? "idle", j.turn ?? turn0];
       await Bun.sleep(3000); // ponytail: idle before any new turn returns at once; poll 3s until a turn advances
     }
   },
@@ -373,7 +414,8 @@ export const mux = HC ? {
   closeSpace: (p: string) => { const w = deep(jsonOf(sh(["herdr", "pane", "get", p]).out), "workspace_id"); if (w) sh(["herdr", "workspace", "close", w]); },
   notify: (title: string, body: string) => sh(["herdr", "notification", "show", title, "--body", body, "--sound", "request"]),
   open: (..._: any[]): string => die("herdr: open is inline in dispatch"),
-  async settle(p: string, after = 0): Promise<[string, number] | null> {
+  // `_reported` is for hc; here a block is one state_change_seq, and the next call waits for a newer one anyway
+  async settle(p: string, after = 0, _reported = ""): Promise<[string, number] | null> {
     // state_change_seq is herdr's turn counter, so a turn too short to catch as "working" still counts.
     // First call: an agent already settled at launch doesn't count. Only a gone pane means it exited.
     // ponytail: 3s poll; herdr agent wait has no "after seq" option
@@ -971,25 +1013,32 @@ async function main(args: string[]) {
         if (!pane || !mux.alive(pane) || listening(m.too)) return;
         if (!mux.focused(pane)) {
           // everything still held for this pane goes in one push, so a burst of reports lands as one message.
-          // The other held deliverers then find their message seen and stop.
-          const held = db.query("SELECT * FROM messages WHERE too=? AND seen=0 ORDER BY id").all(m.too) as any[];
-          const text = held.length === 1 ? pushText(m)
-            : `[rig] ${held.length} messages while you were busy:\n` + held.map(h => `- ${h.frm}${h.ticket ? ` on ${h.ticket}` : ""}: ${h.body.split("\n")[0]}`).join("\n") + "\n(rig show <ticket> for the full text)";
-          if (mux.push(pane, text)) db.run(`UPDATE messages SET seen=1 WHERE id IN (${held.map(h => h.id).join(",")})`);
+          // Reserve the batch before pushing so other deliverers cannot send it too.
+          const held = claimHeld(db, m.too);
+          if (!held.length) return;
+          let delivered = false;
+          try {
+            const text = held.length === 1 ? pushText(held[0]) : digestText(held);
+            delivered = mux.push(pane, text);
+          } finally {
+            finishHeld(db, held, delivered);
+          }
           return;
         }
       }
       return;
     }
     case "_watch": { // detached, per pane run: when the agent settles without having reported, tell the manager. herdr does the waiting.
-      let turn = 0, since = db.query("SELECT started FROM runs WHERE id=?").get(Number(pos[0])) as any;
+      let turn = 0, stuck = "", since = db.query("SELECT started FROM runs WHERE id=?").get(Number(pos[0])) as any;
       since = since?.started ?? now();
       for (;;) {
         const r = db.query("SELECT * FROM runs WHERE id=?").get(Number(pos[0])) as any;
         if (r?.status !== "running") return;
-        const res = await mux.settle(r.pane, turn);
+        const res = await mux.settle(r.pane, turn, stuck);
         const state = res?.[0];
         if (res) turn = res[1];
+        // reported below (or by the worker): one report per block or error, not one per poll while it lasts
+        stuck = state === "blocked" || state === "error" ? state : "";
         if (!state) { // the agent exited or its pane closed. rig close marks the run first; anything else is a surprise
           const now2 = db.query("SELECT status FROM runs WHERE id=?").get(r.id) as any;
           if (now2?.status !== "running") return;

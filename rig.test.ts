@@ -2,7 +2,7 @@ import { test, expect, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { argv, HARNESSES, slot, worktreePlan, deep, openHub, launchCmd } from "./rig.ts";
+import { argv, HARNESSES, slot, worktreePlan, deep, openHub, launchCmd, hcSettled, claimHeld, finishHeld, digestText, open as openDb } from "./rig.ts";
 
 // every temp repo and home a test makes goes when the run ends
 const made: string[] = [];
@@ -117,6 +117,61 @@ test("install copies renamed skills only into harnesses that exist", () => {
   expect(skill).toContain("name: rig-worker");
   expect(skill).toContain("rig skill worker"); // a pointer, so an update needs no reinstall
   expect(require("node:fs").readFileSync(join(home, ".codex/skills/rig-orchestrator/SKILL.md"), "utf8")).toContain("rig skill orchestrator");
+});
+
+test("a block or an error counts once: hc keeps answering it while it lasts", () => {
+  const j = { turn: 0 };
+  expect(hcSettled("blocked", j, 0)).toBe(true);
+  expect(hcSettled("blocked", j, 0, "blocked")).toBe(false); // already reported: the watcher waits instead of reporting again
+  expect(hcSettled("error", j, 0)).toBe(true); // a dropped connection
+  expect(hcSettled("error", j, 0, "error")).toBe(false);
+  expect(hcSettled("error", j, 0, "blocked")).toBe(true); // a different trouble is news
+  expect(hcSettled("working", j, 0, "blocked")).toBe(false);
+  expect(hcSettled("idle", { turn: 1 }, 0, "error")).toBe(true); // a new turn still settles
+});
+
+test("held messages are claimed once, and a digest folds a repeated line", () => {
+  const db = openDb(join(tmp("rig-db-"), "rig.db"));
+  const add = (too: string, body: string) => db.run("INSERT INTO messages(ticket, frm, too, body, at) VALUES('T-2','T-2/worker',?,?,'now')", [too, body]);
+  for (let i = 0; i < 3; i++) add("manager:t1", "[watch] worker run #2 is blocked without reporting. Screen:\n…");
+  add("manager:t1", "done");
+  add("manager:t9", "someone else's");
+  const held = claimHeld(db, "manager:t1");
+  expect(held.map(h => h.body.split("\n")[0])).toEqual([...Array(3).fill("[watch] worker run #2 is blocked without reporting. Screen:"), "done"]);
+  expect(claimHeld(db, "manager:t1")).toEqual([]); // a second deliverer finds nothing: no repeat digest, no empty one
+  expect(digestText(held)).toBe("[rig] 4 messages while you were busy:\n"
+    + "- T-2/worker on T-2: [watch] worker run #2 is blocked without reporting. Screen: (×3)\n"
+    + "- T-2/worker on T-2: done\n(rig show <ticket> for the full text)");
+  expect(claimHeld(db, "manager:t9").length).toBe(1);
+});
+
+test("reserved messages stay unread until delivery succeeds", () => {
+  const path = join(tmp("rig-db-"), "rig.db");
+  const db = openDb(path);
+  db.run("INSERT INTO messages(too, body) VALUES('manager:t1', 'done')");
+  const held = claimHeld(db, "manager:t1");
+  const other = openDb(path);
+  const unread = () => other.query("SELECT body FROM messages WHERE seen=0").all();
+  expect(unread()).toEqual([{ body: "done" }]);
+  expect(claimHeld(other, "manager:t1")).toEqual([]);
+
+  finishHeld(db, held, false);
+  const retry = claimHeld(other, "manager:t1");
+  expect(retry.map(m => m.id)).toEqual(held.map(m => m.id));
+  finishHeld(other, retry, true);
+  expect(unread()).toEqual([]);
+
+  db.run("INSERT INTO messages(too, body) VALUES('manager:t1', 'interrupted')");
+  const child = Bun.spawnSync([process.execPath, "-e",
+    'import { open, claimHeld } from "./rig.ts"; if (claimHeld(open(Bun.argv[1]), "manager:t1").length !== 1) process.exit(1);',
+    path], { cwd: import.meta.dir });
+  expect(child.exitCode).toBe(0);
+  expect(unread()).toEqual([{ body: "interrupted" }]);
+  const recovered = claimHeld(other, "manager:t1");
+  expect(recovered.map(m => m.body)).toEqual(["interrupted"]);
+  finishHeld(other, recovered, true);
+  other.close();
+  db.close();
 });
 
 test("install: agy skills go to ~/.gemini/config/skills, and only when the Antigravity CLI is there", () => {

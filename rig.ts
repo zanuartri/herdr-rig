@@ -51,7 +51,8 @@ export const HARNESSES: Record<string, any> = {
     interactive: ["claude", "--dangerously-skip-permissions", "--session-id", "{sid}", "{model}"],
     headless: ["claude", "-p", "--dangerously-skip-permissions", "--session-id", "{sid}", "{model}"],
     resume: ["claude", "-p", "--dangerously-skip-permissions", "--resume", "{sid}", "{model}"] },
-  codex: { kind: "codex", launch: true, sessionEvent: "thread.started", model: ["-m", "{model}"], effort: ["-c", "model_reasoning_effort={effort}"],
+  codex: { kind: "codex", launch: true, sessionEvent: { key: "type", value: "thread.started", id: "thread_id" },
+    model: ["-m", "{model}"], effort: ["-c", "model_reasoning_effort={effort}"],
     interactive: ["codex", "--dangerously-bypass-approvals-and-sandbox", "{model}"],
     headless: ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "{model}"],
     resume: ["codex", "exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "{model}", "--", "{sid}"] },
@@ -69,10 +70,12 @@ export const HARNESSES: Record<string, any> = {
     interactive: ["opencode", "--auto", "-s", "ses_{sid}", "--prompt"],
     headless: ["opencode", "run", "--auto", "-s", "ses_{sid}", "{model}"],
     resume: ["opencode", "run", "--auto", "-s", "ses_{sid}", "{model}"] },
-  // Antigravity CLI: the prompt is the value of -i/-p. --continue cannot identify the run's conversation.
-  agy: { kind: "agy", launch: true, model: ["--model", "{model}"], effort: ["--effort", "{effort}"],
+  // Antigravity CLI: the prompt is the value of -i/-p (rig appends it last).
+  agy: { kind: "agy", launch: true, sessionEvent: { key: "event", value: "init", id: "conversation_id" },
+    model: ["--model", "{model}"], effort: ["--effort", "{effort}"],
     interactive: ["agy", "--dangerously-skip-permissions", "{model}", "-i"],
-    headless: ["agy", "--dangerously-skip-permissions", "{model}", "-p"] },
+    headless: ["agy", "--dangerously-skip-permissions", "--output-format", "stream-json", "{model}", "-p"],
+    resume: ["agy", "--dangerously-skip-permissions", "--conversation", "{sid}", "{model}", "-p"] },
   commandcode: { model: ["-m", "{model}"], effort: ["--effort", "{effort}"],
     interactive: ["commandcode", "-t", "--permission-mode", "yolo", "{model}"],
     headless: ["commandcode", "-t", "--permission-mode", "yolo", "--tools-all", "{model}", "-p"],
@@ -1058,12 +1061,12 @@ async function main(args: string[]) {
       const r = db.query("SELECT * FROM runs WHERE id=?").get(Number(pos[0])) as any;
       const cmdv = JSON.parse(r.cmd);
       const log = openSync(join(dir, `run-${r.id}.log`), "a");
-      const eventType = !r.session_id && harness(r.harness).sessionEvent;
+      const sessionEvent = !r.session_id && harness(r.harness).sessionEvent;
       let code: number;
       try {
         const p = Bun.spawn([...bin(cmdv[0]), ...cmdv.slice(1)],
-          { cwd: r.cwd, stdout: eventType ? "pipe" : log, stderr: log, stdin: "ignore", windowsHide: true });
-        if (eventType && typeof p.stdout === "object") {
+          { cwd: r.cwd, stdout: sessionEvent ? "pipe" : log, stderr: log, stdin: "ignore", windowsHide: true });
+        if (sessionEvent && typeof p.stdout === "object") {
           const lines = p.stdout.pipeThrough(new TextDecoderStream());
           let pending = "", captured = false;
           for await (const chunk of lines) {
@@ -1073,9 +1076,10 @@ async function main(args: string[]) {
             pending = complete.pop()!;
             for (const line of complete) {
               const event = jsonOf(line);
-              if (event?.type !== eventType || typeof event.thread_id !== "string" ||
-                  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(event.thread_id)) continue;
-              db.run("UPDATE runs SET session_id=? WHERE id=? AND session_id IS NULL", [event.thread_id, r.id]);
+              const id = event?.[sessionEvent.id];
+              if (event?.[sessionEvent.key] !== sessionEvent.value || typeof id !== "string" ||
+                  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) continue;
+              db.run("UPDATE runs SET session_id=? WHERE id=? AND session_id IS NULL", [id, r.id]);
               captured = true;
               break;
             }

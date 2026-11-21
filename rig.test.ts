@@ -34,29 +34,32 @@ test("argv expands model and sid, drops model when unset", () => {
   expect(argv(HARNESSES.omp, "interactive", "", "S")).toEqual(["omp"]);
 });
 
-test("agy: the prompt is the value of -i / -p and headless resume is unavailable", () => {
+test("agy: the prompt is the value of -i / -p and resume selects the conversation ID", () => {
   const h = HARNESSES.agy;
   expect(h.kind).toBe("agy"); // herdr's agent kind, so `herdr agent start --kind agy` launches it
   expect(argv(h, "interactive", "gemini-3.8-flash", "S", "go", "high")).toEqual(
     ["agy", "--dangerously-skip-permissions", "--model", "gemini-3.8-flash", "--effort", "high", "-i", "go"]);
-  expect(argv(h, "headless", "", "S", "go")).toEqual(["agy", "--dangerously-skip-permissions", "-p", "go"]);
-  expect(h.resume).toBeUndefined();
+  expect(argv(h, "headless", "", "S", "go")).toEqual(["agy", "--dangerously-skip-permissions", "--output-format", "stream-json", "-p", "go"]);
+  expect(argv(h, "resume", "m", "S", "more")).toEqual(["agy", "--dangerously-skip-permissions", "--conversation", "S", "--model", "m", "-p", "more"]);
   const { prompt, cmd } = launchCmd(h, "/b.md", "", "", "S");
   expect(cmd).toEqual(["agy", "--dangerously-skip-permissions", "-i", prompt]); // an orchestrator-started manager gets its prompt at launch
 });
 
-test("headless tell resumes the selected worker when a reviewer shares its worktree", async () => {
+test.each([
+  ["codex", '{type:"thread.started",thread_id:crypto.randomUUID()}'],
+  ["agy", '{event:"init",conversation_id:crypto.randomUUID()}'],
+])("%s headless tell targets the worker when a reviewer shares its worktree", async (name, event) => {
   const repo = mkrepo();
   const rig = (...args: string[]) => rigIn(repo, args);
   const codex = HARNESSES.codex;
-  rig("set", "harness.codex", JSON.stringify({
-    ...codex,
-    headless: ["bun", "-e", 'console.log(JSON.stringify({type:"thread.started",thread_id:crypto.randomUUID()}))', "--"],
+  rig("set", `harness.${name}`, JSON.stringify({
+    ...HARNESSES[name],
+    headless: ["bun", "-e", `console.log(JSON.stringify(${event}))`, "--"],
     resume: ["bun", "-e", "console.log(JSON.stringify(Bun.argv.slice(1)))", "--", "{sid}"],
   }));
   rig("new", "Shared worktree");
-  expect(rig("dispatch", "T-1", "--harness", "codex", "--mode", "headless")).toBe("run #1 headless");
-  expect(rig("dispatch", "T-1", "--role", "reviewer", "--harness", "codex", "--mode", "headless")).toBe("run #2 headless");
+  expect(rig("dispatch", "T-1", "--harness", name, "--mode", "headless")).toBe("run #1 headless");
+  expect(rig("dispatch", "T-1", "--role", "reviewer", "--harness", name, "--mode", "headless")).toBe("run #2 headless");
   const db = openDb(join(repo, ".rig", "rig.db"));
   const runs = () => db.query<{ id: number; cwd: string; session_id: string | null; status: string }, []>(
     "SELECT id, cwd, session_id, status FROM runs ORDER BY id"
@@ -82,8 +85,6 @@ test("headless tell resumes the selected worker when a reviewer shares its workt
 
     db.run("UPDATE runs SET session_id=NULL WHERE id=1");
     expect(rig("tell", "T-1", "missing id")).toContain("has no recorded session ID");
-    db.run("UPDATE runs SET harness='agy' WHERE id=1");
-    expect(rig("tell", "T-1", "ambiguous")).toContain("cannot target a specific headless session");
     expect(db.query("SELECT body FROM messages WHERE body LIKE '[steer]%'").all())
       .toEqual([{ body: "[steer] worker update" }]);
   } finally {

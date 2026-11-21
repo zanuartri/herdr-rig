@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-21
 
 ### Added
 - Antigravity CLI as a harness: `--harness agy` (or `rig set worker.harness agy`) for workers, reviewers and managers, including managers started by `rig launch`. It starts through herdr's `agy` agent kind, takes model and effort, and runs with `--dangerously-skip-permissions`. `rig install agy` puts the skills in `~/.gemini/config/skills`, which the Antigravity app shares.

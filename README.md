@@ -165,7 +165,8 @@ The orchestrator's state is one file, `~/.rig/hub.db` (`$RIG_HOME/.rig/hub.db`):
 
 - **Startup dialogs.** Claude Code, Codex, Antigravity CLI and Command Code ask once to trust each new folder, and every worktree is a new folder. rig keeps the pane open and tells you, and the agent continues once you answer.
 - **Codex as manager** runs commands in a sandbox that can't reach `.git` or herdr. Approve `rig` (and the merge `git` commands) when Codex asks.
-- **Antigravity CLI** can't be given a session id, so a resumed `agy` run continues the newest conversation in its folder. That is the right one with a worktree per ticket; with `--no-worktree` two tickets share a folder.
+- **Antigravity CLI** supports steering with `rig tell` in pane and tab mode. Headless `agy` runs do not support `rig tell` because the CLI cannot select the run's specific conversation.
+- **Codex headless runs** record their session ID at startup. To steer a run started before v0.4.1, dispatch a new run first.
 - **opencode's background server** can hold a finished worktree folder open on Windows. `rig clean` removes it once it is released.
 - **Watcher.** An agent that pauses for a long time between tool calls can be reported as idle a little early. The manager reads its screen before acting.
 - **Not yet exercised end to end:** `merge pr` (push and `gh pr create`), auto-merge with `autonomy merge`, and the orchestrator on the herdr CLI.

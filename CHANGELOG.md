@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] - 2026-11-21
+
+### Fixed
+- `rig tell` now resumes the exact Codex headless session, even when the worker and reviewer share a worktree. Runs without a captured session ID need a new dispatch. Antigravity CLI steering is available in pane and tab mode, where the target terminal is known.
+
 ## [0.4.0] - 2026-11-21
 
 ### Fixed

@@ -2,7 +2,7 @@
 // rig: tiny shared state + launcher for a herdr manager/worker/reviewer setup. All judgement lives in skills/.
 import { Database } from "bun:sqlite";
 import { parseArgs } from "node:util";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, openSync, rmSync, readdirSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, readFileSync, writeFileSync, openSync, rmSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 
@@ -51,11 +51,10 @@ export const HARNESSES: Record<string, any> = {
     interactive: ["claude", "--dangerously-skip-permissions", "--session-id", "{sid}", "{model}"],
     headless: ["claude", "-p", "--dangerously-skip-permissions", "--session-id", "{sid}", "{model}"],
     resume: ["claude", "-p", "--dangerously-skip-permissions", "--resume", "{sid}", "{model}"] },
-  codex: { kind: "codex", launch: true, model: ["-m", "{model}"], effort: ["-c", "model_reasoning_effort={effort}"],
+  codex: { kind: "codex", launch: true, sessionEvent: "thread.started", model: ["-m", "{model}"], effort: ["-c", "model_reasoning_effort={effort}"],
     interactive: ["codex", "--dangerously-bypass-approvals-and-sandbox", "{model}"],
-    headless: ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "{model}"],
-    // ponytail: --last picks the newest session in this cwd; fine with one worktree per ticket, wrong without worktrees
-    resume: ["codex", "exec", "resume", "--last", "--dangerously-bypass-approvals-and-sandbox", "{model}"] },
+    headless: ["codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "{model}"],
+    resume: ["codex", "exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "{model}", "--", "{sid}"] },
   omp: { kind: "omp", launch: true, model: ["--model={model}"], effort: ["--thinking={effort}"],
     interactive: ["omp", "{model}"],
     headless: ["omp", "-p", "{model}"],
@@ -70,12 +69,10 @@ export const HARNESSES: Record<string, any> = {
     interactive: ["opencode", "--auto", "-s", "ses_{sid}", "--prompt"],
     headless: ["opencode", "run", "--auto", "-s", "ses_{sid}", "{model}"],
     resume: ["opencode", "run", "--auto", "-s", "ses_{sid}", "{model}"] },
-  // Antigravity CLI: the prompt is the value of -i/-p (rig appends it last). New sessions can't take an id, so resume
-  // uses --continue. ponytail: --continue picks the newest conversation in this cwd, like codex's --last
+  // Antigravity CLI: the prompt is the value of -i/-p. --continue cannot identify the run's conversation.
   agy: { kind: "agy", launch: true, model: ["--model", "{model}"], effort: ["--effort", "{effort}"],
     interactive: ["agy", "--dangerously-skip-permissions", "{model}", "-i"],
-    headless: ["agy", "--dangerously-skip-permissions", "{model}", "-p"],
-    resume: ["agy", "--dangerously-skip-permissions", "--continue", "{model}", "-p"] },
+    headless: ["agy", "--dangerously-skip-permissions", "{model}", "-p"] },
   commandcode: { model: ["-m", "{model}"], effort: ["--effort", "{effort}"],
     interactive: ["commandcode", "-t", "--permission-mode", "yolo", "{model}"],
     headless: ["commandcode", "-t", "--permission-mode", "yolo", "--tools-all", "{model}", "-p"],
@@ -130,6 +127,7 @@ export function open(path: string) {
     CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);`);
   // columns added later; older DBs get them on open
   try { db.exec("ALTER TABLE runs ADD COLUMN effort TEXT"); } catch {}
+  try { db.exec("ALTER TABLE runs ADD COLUMN session_id TEXT"); } catch {}
   try { db.exec("ALTER TABLE tickets ADD COLUMN after TEXT"); } catch {} // "T-3,T-4": waits for these
   try { db.exec("ALTER TABLE tickets ADD COLUMN base TEXT"); } catch {} // branch it starts from and lands on
   try { db.exec("ALTER TABLE tickets ADD COLUMN story TEXT"); } catch {} // groups tickets across repos on the orchestrator board
@@ -1060,8 +1058,33 @@ async function main(args: string[]) {
       const r = db.query("SELECT * FROM runs WHERE id=?").get(Number(pos[0])) as any;
       const cmdv = JSON.parse(r.cmd);
       const log = openSync(join(dir, `run-${r.id}.log`), "a");
-      const p = Bun.spawn([...bin(cmdv[0]), ...cmdv.slice(1)], { cwd: r.cwd, stdio: ["ignore", log, log], windowsHide: true });
-      const code = await p.exited;
+      const eventType = !r.session_id && harness(r.harness).sessionEvent;
+      let code: number;
+      try {
+        const p = Bun.spawn([...bin(cmdv[0]), ...cmdv.slice(1)],
+          { cwd: r.cwd, stdout: eventType ? "pipe" : log, stderr: log, stdin: "ignore", windowsHide: true });
+        if (eventType && typeof p.stdout === "object") {
+          const lines = p.stdout.pipeThrough(new TextDecoderStream());
+          let pending = "", captured = false;
+          for await (const chunk of lines) {
+            writeFileSync(log, chunk);
+            if (captured) continue;
+            const complete = (pending + chunk).split("\n");
+            pending = complete.pop()!;
+            for (const line of complete) {
+              const event = jsonOf(line);
+              if (event?.type !== eventType || typeof event.thread_id !== "string" ||
+                  !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(event.thread_id)) continue;
+              db.run("UPDATE runs SET session_id=? WHERE id=? AND session_id IS NULL", [event.thread_id, r.id]);
+              captured = true;
+              break;
+            }
+          }
+        }
+        code = await p.exited;
+      } finally {
+        closeSync(log);
+      }
       db.run("UPDATE runs SET status=? WHERE id=?", [`exited ${code}`, r.id]);
       const tail = readFileSync(join(dir, `run-${r.id}.log`), "utf8").trim().split("\n").slice(-15).join("\n");
       const t = ticket(r.ticket);
@@ -1071,6 +1094,14 @@ async function main(args: string[]) {
     case "tell": { // steer: pane → type into it (--now interrupts first); headless → interrupt + resume with the message
       const r = runOf(pos[0]);
       const msg = pos.slice(1).join(" ") || die("message required");
+      let resume: string[] | undefined;
+      if (r.mode === "headless") {
+        const h = harness(r.harness);
+        if (!h.resume) die(`${r.harness} cannot target a specific headless session. Use a pane or tab for interactive steering.`);
+        if (h.sessionEvent && !r.session_id)
+          die(`run #${r.id} has no recorded session ID. Wait for it to start or dispatch a new run.`);
+        resume = argv(h, "resume", r.model, r.session_id ?? r.sid, msg, r.effort ?? "");
+      }
       db.run("INSERT INTO messages(ticket, frm, too, body, at) VALUES(?,?,?,?,?)", [r.ticket, me, `${r.ticket}/${r.role}`, `[steer] ${msg}`, now()]);
       // a worker being told something is back at work (e.g. reviewer findings), so the board shows it in Working
       if (r.role === "worker" && ["review", "needs-you", "blocked"].includes(ticket(r.ticket).status)) db.run("UPDATE tickets SET status='working' WHERE id=?", [r.ticket]);
@@ -1079,7 +1110,7 @@ async function main(args: string[]) {
         return void mux.push(r.pane, msg);
       }
       if (r.status === "running" && r.pid) kill(r.pid);
-      spawnHeadless(r.id, argv(harness(r.harness), "resume", r.model, r.sid, msg, r.effort ?? ""), r.cwd);
+      spawnHeadless(r.id, resume!, r.cwd);
       return console.log(`run #${r.id} resumed`);
     }
     case "clean": { // worktrees of done tickets: drop the merged ones (or one ticket, --force for unmerged), then prune

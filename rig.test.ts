@@ -34,16 +34,62 @@ test("argv expands model and sid, drops model when unset", () => {
   expect(argv(HARNESSES.omp, "interactive", "", "S")).toEqual(["omp"]);
 });
 
-test("agy: the prompt is the value of -i / -p, resume continues the folder's newest conversation", () => {
+test("agy: the prompt is the value of -i / -p and headless resume is unavailable", () => {
   const h = HARNESSES.agy;
   expect(h.kind).toBe("agy"); // herdr's agent kind, so `herdr agent start --kind agy` launches it
   expect(argv(h, "interactive", "gemini-3.8-flash", "S", "go", "high")).toEqual(
     ["agy", "--dangerously-skip-permissions", "--model", "gemini-3.8-flash", "--effort", "high", "-i", "go"]);
   expect(argv(h, "headless", "", "S", "go")).toEqual(["agy", "--dangerously-skip-permissions", "-p", "go"]);
-  expect(argv(h, "resume", "m", "S", "more")).toEqual(["agy", "--dangerously-skip-permissions", "--continue", "--model", "m", "-p", "more"]);
+  expect(h.resume).toBeUndefined();
   const { prompt, cmd } = launchCmd(h, "/b.md", "", "", "S");
   expect(cmd).toEqual(["agy", "--dangerously-skip-permissions", "-i", prompt]); // an orchestrator-started manager gets its prompt at launch
 });
+
+test("headless tell resumes the selected worker when a reviewer shares its worktree", async () => {
+  const repo = mkrepo();
+  const rig = (...args: string[]) => rigIn(repo, args);
+  const codex = HARNESSES.codex;
+  rig("set", "harness.codex", JSON.stringify({
+    ...codex,
+    headless: ["bun", "-e", 'console.log(JSON.stringify({type:"thread.started",thread_id:crypto.randomUUID()}))', "--"],
+    resume: ["bun", "-e", "console.log(JSON.stringify(Bun.argv.slice(1)))", "--", "{sid}"],
+  }));
+  rig("new", "Shared worktree");
+  expect(rig("dispatch", "T-1", "--harness", "codex", "--mode", "headless")).toBe("run #1 headless");
+  expect(rig("dispatch", "T-1", "--role", "reviewer", "--harness", "codex", "--mode", "headless")).toBe("run #2 headless");
+  const db = openDb(join(repo, ".rig", "rig.db"));
+  const runs = () => db.query<{ id: number; cwd: string; session_id: string | null; status: string }, []>(
+    "SELECT id, cwd, session_id, status FROM runs ORDER BY id"
+  ).all();
+  const waitForExit = async () => {
+    for (let i = 0; i < 100 && !runs().every(r => r.status === "exited 0"); i++) await Bun.sleep(50);
+    expect(runs().map(r => r.status)).toEqual(["exited 0", "exited 0"]);
+  };
+  try {
+    await waitForExit();
+    const [worker, reviewer] = runs();
+    expect(worker.cwd).toBe(reviewer.cwd);
+    expect(worker.session_id).toBeTruthy();
+    expect(reviewer.session_id).toBeTruthy();
+    expect(worker.session_id).not.toBe(reviewer.session_id);
+    expect(argv(codex, "resume", "model", worker.session_id!, "update")).toEqual([
+      "codex", "exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "-m", "model", "--", worker.session_id!, "update",
+    ]);
+    expect(rig("tell", "T-1", "worker update")).toBe("run #1 resumed");
+    await waitForExit();
+    const log = await Bun.file(join(repo, ".rig", "run-1.log")).text();
+    expect(log).toContain(JSON.stringify([worker.session_id, "worker update"]));
+
+    db.run("UPDATE runs SET session_id=NULL WHERE id=1");
+    expect(rig("tell", "T-1", "missing id")).toContain("has no recorded session ID");
+    db.run("UPDATE runs SET harness='agy' WHERE id=1");
+    expect(rig("tell", "T-1", "ambiguous")).toContain("cannot target a specific headless session");
+    expect(db.query("SELECT body FROM messages WHERE body LIKE '[steer]%'").all())
+      .toEqual([{ body: "[steer] worker update" }]);
+  } finally {
+    db.close();
+  }
+}, 20000);
 
 test("ticket, messages and a headless run end to end", async () => {
   const repo = tmp("rig-");
@@ -224,7 +270,11 @@ test("the board shows the running worker, not a reviewer that already closed", (
   const env = { ...process.env, HERDR_PANE_ID: "", HC_TERMINAL_ID: "", RIG_RUN: "", RIG_ROOT: "" };
   const rig = (...args: string[]) => Bun.spawnSync(["bun", join(import.meta.dir, "rig.ts"), ...args], { cwd: repo, env }).stdout.toString();
   rig("new", "fix after review");
-  rig("set", "harness.slow", JSON.stringify({ model: [], headless: ["bun", "-e", "setTimeout(() => {}, 20000)"] }));
+  rig("set", "harness.slow", JSON.stringify({
+    model: [],
+    headless: ["bun", "-e", "setTimeout(() => {}, 20000)"],
+    resume: ["bun", "-e", "setTimeout(() => {}, 20000)", "--"],
+  }));
   rig("dispatch", "T-1", "--harness", "slow", "--mode", "headless", "--no-worktree");        // run 1: worker, still going
   rig("dispatch", "T-1", "--role", "reviewer", "--harness", "slow", "--mode", "headless");   // run 2: reviewer
   rig("close", "2");                                                                          // FIX sent, reviewer closed
@@ -234,7 +284,7 @@ test("the board shows the running worker, not a reviewer that already closed", (
   expect(t.run.role).toBe("worker");
   expect(t.orphan).toBe(false);
   // `tell T-1` steers the worker even though the reviewer is the newer run
-  rig("tell", "T-1", "fix it");
+  expect(rig("tell", "T-1", "fix it").trim()).toBe("run #1 resumed");
   expect(Bun.spawnSync(["bun", join(import.meta.dir, "rig.ts"), "inbox"], { cwd: repo, env: { ...env, RIG_RUN: "1" } }).stdout.toString()).toContain("fix it");
   rig("close", "T-1");
 }, 30000);

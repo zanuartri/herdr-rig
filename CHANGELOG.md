@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 - A worker stuck on a dialog (folder trust, a permission prompt) or in an error (a dropped connection, a failed request) flooded its manager in the herdr app: the watcher reported the same state every poll (75 messages in 24 s), because hc answers "blocked" or "error" at once for as long as it lasts. It now reports each once, and again only after it clears and comes back.
-- Messages held while the manager's pane was focused came back as repeated digests ("22 messages while you were busy", then 23, 24…) and empty ones ("0 messages"): every held deliverer read the same unseen messages while the first push was still waiting on a draft. The first deliverer now claims them in one statement; a failed push hands them back to the inbox. A digest folds a repeated line into one with its count (`(×3)`).
+- Messages held while the manager's pane was focused came back as repeated digests ("22 messages while you were busy", then 23, 24…) and empty ones ("0 messages"): every held deliverer read the same unseen messages while the first push was still waiting on a draft. Only one deliverer reserves each batch. Messages stay unread until the push succeeds, so interrupted deliveries remain available in the inbox. A digest folds a repeated line into one with its count (`(×3)`).
 
 ### Added
 - Antigravity CLI as a harness: `--harness agy` (or `rig set worker.harness agy`) for workers, reviewers and managers, including managers started by `rig launch`. It starts through herdr's `agy` agent kind, takes model and effort, and runs with `--dangerously-skip-permissions`. `rig install agy` puts the skills in `~/.gemini/config/skills`, which the Antigravity app shares.

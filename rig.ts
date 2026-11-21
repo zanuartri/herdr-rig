@@ -133,6 +133,7 @@ export function open(path: string) {
   try { db.exec("ALTER TABLE tickets ADD COLUMN after TEXT"); } catch {} // "T-3,T-4": waits for these
   try { db.exec("ALTER TABLE tickets ADD COLUMN base TEXT"); } catch {} // branch it starts from and lands on
   try { db.exec("ALTER TABLE tickets ADD COLUMN story TEXT"); } catch {} // groups tickets across repos on the orchestrator board
+  try { db.exec("ALTER TABLE messages ADD COLUMN delivery_pid INTEGER"); } catch {}
   return db;
 }
 // ---- hub: <RIG_HOME>/.rig/hub.db, one per machine: the repos an orchestrator sees, and the messages meant for it
@@ -282,9 +283,28 @@ const hcGet = (t: string) => { const r = sh(["hc", "get", t, "--json"]); try { r
  *  a failed request) counts unless it is the one already reported (`skip`): hc answers it at once for as long as it lasts. */
 export const hcSettled = (st: string | undefined, j: any, turn0: number, skip = "") =>
   ((st === "blocked" || st === "error") && st !== skip) || (j.turn > turn0 && j.reason !== "timeout");
-/** the messages still held for `too`, marked seen in one statement: a deliverer running beside this one gets none of them */
-export const claimHeld = (db: Database, too: string) =>
-  (db.query("UPDATE messages SET seen=1 WHERE too=? AND seen=0 RETURNING *").all(too) as any[]).sort((a, b) => a.id - b.id);
+/** Reserve held messages for one pane delivery while keeping them unread in the inbox. */
+export function claimHeld(db: Database, too: string) {
+  return db.transaction(() => {
+    const owners = db.query<{ delivery_pid: number }, [string]>(
+      "SELECT DISTINCT delivery_pid FROM messages WHERE too=? AND seen=0 AND delivery_pid IS NOT NULL"
+    ).all(too);
+    for (const { delivery_pid: pid } of owners) {
+      try { process.kill(pid, 0); } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ESRCH")
+          db.run("UPDATE messages SET delivery_pid=NULL WHERE too=? AND delivery_pid=?", [too, pid]);
+      }
+    }
+    return (db.query("UPDATE messages SET delivery_pid=? WHERE too=? AND seen=0 AND delivery_pid IS NULL RETURNING *")
+      .all(process.pid, too) as any[]).sort((a, b) => a.id - b.id);
+  }).immediate();
+}
+
+export function finishHeld(db: Database, held: { id: number }[], delivered: boolean) {
+  db.run(`UPDATE messages SET delivery_pid=NULL${delivered ? ", seen=1" : ""}
+    WHERE delivery_pid=? AND id IN (SELECT value FROM json_each(?))`,
+    [process.pid, JSON.stringify(held.map(h => h.id))]);
+}
 /** several held messages as one push: first lines, a run of the same line once with its count */
 export function digestText(held: any[]) {
   const lines: [string, number][] = [];
@@ -993,12 +1013,16 @@ async function main(args: string[]) {
         if (!pane || !mux.alive(pane) || listening(m.too)) return;
         if (!mux.focused(pane)) {
           // everything still held for this pane goes in one push, so a burst of reports lands as one message.
-          // Claim it first, in one statement: the push can wait on a draft, and every other held deliverer polling
-          // meanwhile must find nothing left (not push the same digest again, nor an empty one). A failed push gives it back.
+          // Reserve the batch before pushing so other deliverers cannot send it too.
           const held = claimHeld(db, m.too);
           if (!held.length) return;
-          const text = held.length === 1 ? pushText(held[0]) : digestText(held);
-          if (!mux.push(pane, text)) db.run(`UPDATE messages SET seen=0 WHERE id IN (${held.map(h => h.id).join(",")})`);
+          let delivered = false;
+          try {
+            const text = held.length === 1 ? pushText(held[0]) : digestText(held);
+            delivered = mux.push(pane, text);
+          } finally {
+            finishHeld(db, held, delivered);
+          }
           return;
         }
       }

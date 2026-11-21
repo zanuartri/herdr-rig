@@ -2,7 +2,7 @@ import { test, expect, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { argv, HARNESSES, slot, worktreePlan, deep, openHub, launchCmd, hcSettled, claimHeld, digestText, open as openDb } from "./rig.ts";
+import { argv, HARNESSES, slot, worktreePlan, deep, openHub, launchCmd, hcSettled, claimHeld, finishHeld, digestText, open as openDb } from "./rig.ts";
 
 // every temp repo and home a test makes goes when the run ends
 const made: string[] = [];
@@ -143,6 +143,35 @@ test("held messages are claimed once, and a digest folds a repeated line", () =>
     + "- T-2/worker on T-2: [watch] worker run #2 is blocked without reporting. Screen: (×3)\n"
     + "- T-2/worker on T-2: done\n(rig show <ticket> for the full text)");
   expect(claimHeld(db, "manager:t9").length).toBe(1);
+});
+
+test("reserved messages stay unread until delivery succeeds", () => {
+  const path = join(tmp("rig-db-"), "rig.db");
+  const db = openDb(path);
+  db.run("INSERT INTO messages(too, body) VALUES('manager:t1', 'done')");
+  const held = claimHeld(db, "manager:t1");
+  const other = openDb(path);
+  const unread = () => other.query("SELECT body FROM messages WHERE seen=0").all();
+  expect(unread()).toEqual([{ body: "done" }]);
+  expect(claimHeld(other, "manager:t1")).toEqual([]);
+
+  finishHeld(db, held, false);
+  const retry = claimHeld(other, "manager:t1");
+  expect(retry.map(m => m.id)).toEqual(held.map(m => m.id));
+  finishHeld(other, retry, true);
+  expect(unread()).toEqual([]);
+
+  db.run("INSERT INTO messages(too, body) VALUES('manager:t1', 'interrupted')");
+  const child = Bun.spawnSync([process.execPath, "-e",
+    'import { open, claimHeld } from "./rig.ts"; if (claimHeld(open(Bun.argv[1]), "manager:t1").length !== 1) process.exit(1);',
+    path], { cwd: import.meta.dir });
+  expect(child.exitCode).toBe(0);
+  expect(unread()).toEqual([{ body: "interrupted" }]);
+  const recovered = claimHeld(other, "manager:t1");
+  expect(recovered.map(m => m.body)).toEqual(["interrupted"]);
+  finishHeld(other, recovered, true);
+  other.close();
+  db.close();
 });
 
 test("install: agy skills go to ~/.gemini/config/skills, and only when the Antigravity CLI is there", () => {
